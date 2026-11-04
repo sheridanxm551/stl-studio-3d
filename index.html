@@ -1,0 +1,1459 @@
+import asyncio
+import re
+import time
+import webbrowser
+from aiohttp import web
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart
+from aiogram.types import (
+    Message, InlineKeyboardMarkup, InlineKeyboardButton,
+    WebAppInfo, MenuButtonWebApp, LabeledPrice, PreCheckoutQuery, BufferedInputFile
+)
+
+# ================= НАСТРОЙКИ БИЗНЕСА =================
+BOT_TOKEN = "9037917905:AAFkCKu3MAjVhwfUse620o6aBF7IKN4z2_k"
+
+# Твой личный Telegram ID (заполнится автоматически при первом нажатии /start)
+ADMIN_CHAT_ID = 0
+
+PRICE_SINGLE_STARS = 25   # Цена за 1 выгрузку STL (в Telegram Stars)
+PRICE_PRO_STARS = 150     # Цена за VIP-Безлимит + PRO шаблоны (в Telegram Stars)
+PORT = 8765
+# =====================================================
+
+APP_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>STL Studio 3D COMMERCIAL</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  body { margin: 0; background: #090d14; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+
+  #workspace { display: flex; flex: 1; width: 100%; height: 100vh; overflow: hidden; flex-direction: row; }
+
+  /* ЛЕВАЯ ЧАСТЬ: 3D-ОКНО */
+  #viewport { position: relative; flex: 1; height: 100%; background: radial-gradient(circle at 50% 50%, #1a2538 0%, #070a10 100%); overflow: hidden; }
+  .vp-top { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; gap: 8px; pointer-events: none; flex-wrap: wrap; z-index: 5; }
+  .vp-group { display: flex; gap: 6px; pointer-events: auto; flex-wrap: wrap; }
+  .btn-light { background: rgba(17, 24, 38, 0.88); color: #cbd5e1; border: 1px solid #334766; padding: 7px 11px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; backdrop-filter: blur(6px); transition: 0.15s; outline: none; }
+  .btn-light:hover { border-color: #38bdf8; color: #fff; }
+  .btn-light.active { background: #f59e0b; color: #000; border-color: #fbbf24; box-shadow: 0 0 12px rgba(245, 158, 11, 0.5); }
+
+  .vp-bottom { position: absolute; bottom: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: center; background: rgba(13, 19, 30, 0.9); border: 1px solid #263852; padding: 9px 14px; border-radius: 10px; backdrop-filter: blur(6px); pointer-events: none; z-index: 5; flex-wrap: wrap; gap: 8px; }
+  .stat-item { font-size: 12px; color: #94a3b8; }
+  .stat-item b { color: #38bdf8; font-family: monospace; font-size: 13px; }
+  .price-tag { background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #34d399; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold; }
+
+  /* ПРАВАЯ ЧАСТЬ: ПАНЕЛЬ НАСТРОЕК */
+  #sidebar { width: 410px; min-width: 350px; max-width: 440px; height: 100%; background: #111824; border-left: 1px solid #243247; display: flex; flex-direction: column; z-index: 10; }
+  .side-header { padding: 10px 14px; background: #141d2d; border-bottom: 1px solid #243247; display: flex; justify-content: space-between; align-items: center; }
+  .brand { font-weight: 900; font-size: 14px; letter-spacing: 0.5px; background: linear-gradient(90deg, #00e5ff, #fbbf24); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .quota-pill { font-size: 11px; background: #1e293b; border: 1px solid #38bdf8; color: #e2e8f0; padding: 3px 9px; border-radius: 20px; font-weight: bold; cursor: pointer; }
+  .quota-pill.pro { background: rgba(245, 158, 11, 0.2); border-color: #fbbf24; color: #fde68a; }
+
+  .tabs { display: grid; grid-template-columns: repeat(4, 1fr); background: #0c111b; border-bottom: 1px solid #1e293b; }
+  .tab-btn { padding: 10px 2px; text-align: center; font-size: 11px; font-weight: bold; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; transition: 0.15s; }
+  .tab-btn.active { color: #38bdf8; border-bottom-color: #00e5ff; background: #131c2c; }
+
+  #controls { flex: 1; padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .tab-panel { display: none; flex-direction: column; gap: 10px; }
+  .tab-panel.active { display: flex; }
+
+  .file-label { background: #192538; border: 1px dashed #38bdf8; color: #38bdf8; padding: 10px; border-radius: 8px; text-align: center; font-size: 12px; font-weight: bold; cursor: pointer; display: block; }
+  input[type="file"] { display: none; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ctrl-group { background: #162030; border: 1px solid #233248; padding: 8px 10px; border-radius: 8px; display: flex; flex-direction: column; gap: 5px; }
+  .ctrl-head { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; }
+  .ctrl-head b { color: #f8fafc; font-family: monospace; font-size: 12px; }
+  input[type="range"] { width: 100%; accent-color: #00e5ff; cursor: pointer; margin: 0; }
+  select, input[type="text"], textarea { background: #0c121d; color: #e2e8f0; border: 1px solid #2b3d59; padding: 7px 9px; border-radius: 6px; font-size: 12px; outline: none; width: 100%; font-family: inherit; }
+  input[type="text"]:focus, textarea:focus { border-color: #00e5ff; }
+
+  .preset-card { background: #172234; border: 1px solid #2a3d5c; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 7px; }
+  .preset-title { font-size: 12px; font-weight: bold; color: #38bdf8; display: flex; justify-content: space-between; align-items: center; }
+  .action-btn { background: #1e293b; color: #e2e8f0; border: 1px solid #38bdf8; padding: 8px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer; text-align: center; }
+  .action-btn:hover { background: #0284c7; color: #fff; }
+  .action-btn.rec { border-color: #f43f5e; color: #fda4af; }
+
+  .toggles { display: flex; gap: 6px; }
+  .chk-btn { flex: 1; background: #162030; border: 1px solid #2a3a52; color: #94a3b8; padding: 8px 4px; border-radius: 8px; font-size: 11px; font-weight: bold; text-align: center; cursor: pointer; }
+  .chk-btn.on { background: #112e2b; border-color: #10b981; color: #34d399; }
+
+  .side-footer { background: #0d131f; padding: 12px 14px; border-top: 1px solid #233248; display: flex; flex-direction: column; gap: 8px; }
+  .export-btn { width: 100%; background: linear-gradient(135deg, #00e5ff, #0284c7); color: #04121a; border: none; padding: 12px; border-radius: 9px; font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.7px; cursor: pointer; box-shadow: 0 4px 14px rgba(0, 229, 255, 0.25); }
+  .order-btn { width: 100%; background: linear-gradient(135deg, #10b981, #059669); color: #fff; border: none; padding: 10px; border-radius: 8px; font-size: 12px; font-weight: bold; cursor: pointer; }
+
+  /* МОДАЛЬНЫЕ ОКНА */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(6, 10, 16, 0.88); backdrop-filter: blur(5px); z-index: 50; display: none; justify-content: center; align-items: center; padding: 16px; }
+  .modal-box { background: #131c2b; border: 1px solid #2f4363; border-radius: 12px; max-width: 390px; width: 100%; padding: 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 12px 35px rgba(0,0,0,0.6); }
+  .m-title { font-size: 17px; font-weight: 900; color: #fff; text-align: center; }
+  .m-sub { font-size: 12px; color: #94a3b8; text-align: center; line-height: 1.4; }
+  .pay-card { background: linear-gradient(135deg, #1b283d, #152030); border: 2px solid #38bdf8; border-radius: 10px; padding: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: 0.15s; }
+  .pay-card:hover { transform: scale(0.99); border-color: #fbbf24; }
+  .pay-card.vip { border-color: #f59e0b; background: linear-gradient(135deg, #2b2212, #1a1610); }
+  .star-badge { background: #f59e0b; color: #000; font-weight: 900; font-size: 13px; padding: 5px 10px; border-radius: 20px; white-space: nowrap; }
+  .close-link { text-align: center; font-size: 12px; color: #64748b; cursor: pointer; padding: 4px; }
+
+  @media (max-width: 780px) {
+    #workspace { flex-direction: column; }
+    #viewport { height: 42vh; }
+    #sidebar { width: 100%; max-width: 100%; height: 58vh; border-left: none; border-top: 1px solid #243247; }
+  }
+</style>
+</head>
+<body>
+
+<div id="workspace">
+  <!-- ЛЕВОЕ ОКНО: 3D МОДЕЛЬ -->
+  <div id="viewport">
+    <div class="vp-top">
+      <div class="vp-group">
+        <button class="btn-light" id="backlight-btn" onclick="toggleBacklight()">💡 Просвет</button>
+        <button class="btn-light" id="wire-btn" onclick="toggleWireframe()">🕸 Сетка САПР</button>
+        <button class="btn-light" id="rot-btn" onclick="toggleAutoRotate()">🔄 Вращение</button>
+      </div>
+      <div class="vp-group">
+        <select class="btn-light" id="mat-sel" onchange="changeFilament(this.value)">
+          <option value="sky">🔵 Синий PETG</option>
+          <option value="gold">🟡 Золотой Шёлк</option>
+          <option value="ivory">⚪ Белый Литофан</option>
+          <option value="emerald">🟢 Изумруд</option>
+          <option value="copper">🟠 Медный</option>
+          <option value="carbon">⚫ Чёрный Карбон</option>
+        </select>
+        <button class="btn-light" onclick="resetCam()">🎯 Центрировать</button>
+      </div>
+    </div>
+
+    <div class="vp-bottom">
+      <div class="stat-item" id="dim-info">Габариты: <b>65.0 × 65.0 × 4.0 мм</b></div>
+      <div class="stat-item" id="vol-info">Вес: <b>12.4 г</b> (9.8 см³)</div>
+      <div class="price-tag" id="price-info">Себестоимость: 25 ₽ | Продажа: ~450 ₽</div>
+    </div>
+  </div>
+
+  <!-- ПРАВАЯ ПАНЕЛЬ НАСТРОЕК -->
+  <div id="sidebar">
+    <div class="side-header">
+      <div class="brand">🧊 STL STUDIO 3D</div>
+      <div class="quota-pill" id="quota-badge" onclick="openPayModal()">🎁 Лимит: 1 беспл.</div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab-btn active" onclick="switchTab(0)">📐 1. Форма</div>
+      <div class="tab-btn" onclick="switchTab(1)">⚡ 2. Шаблоны</div>
+      <div class="tab-btn" onclick="switchTab(2)">🔤 3. Текст/Фото</div>
+      <div class="tab-btn" onclick="switchTab(3)">💰 4. Бизнес</div>
+    </div>
+
+    <div id="controls">
+      <!-- ВКЛАДКА 1: ФОРМА -->
+      <div class="tab-panel active" id="tab-0">
+        <label class="file-label">
+          📁 Загрузить своё фото / логотип (PNG, JPG)
+          <input type="file" id="img-input" accept="image/*">
+        </label>
+
+        <div class="grid-2">
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>Режим рельефа</span></div>
+            <select id="mode-sel" onchange="rebuildMesh()">
+              <option value="relief">🪙 3D-Барельеф</option>
+              <option value="litho">💡 Литофания (Лампа)</option>
+              <option value="voxel">🧱 Ступени (4 слоя)</option>
+              <option value="stamp">💮 3D-Штамп (Зеркало)</option>
+            </select>
+          </div>
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>3D-Профиль детали</span></div>
+            <select id="curve-sel" onchange="rebuildMesh()">
+              <option value="flat">📏 Плоская / Брелок</option>
+              <option value="stand">🗿 Стела с подставкой</option>
+              <option value="arc100">🌙 Ночник (Дуга 100°)</option>
+              <option value="arc180">🏮 Плафон (Дуга 180°)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>Ширина (X)</span><b id="v-width">65 мм</b></div>
+            <input type="range" id="s-width" min="25" max="160" step="1" value="65" oninput="onSlider()">
+          </div>
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>Высота рельефа</span><b id="v-rel">2.6 мм</b></div>
+            <input type="range" id="s-rel" min="0.5" max="8.0" step="0.1" value="2.6" oninput="onSlider()">
+          </div>
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>Толщина базы</span><b id="v-base">1.4 мм</b></div>
+            <input type="range" id="s-base" min="0.6" max="5.0" step="0.2" value="1.4" oninput="onSlider()">
+          </div>
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>Контур обрезки</span></div>
+            <select id="shape-sel" onchange="rebuildMesh()">
+              <option value="rect">🟦 Прямоугольник</option>
+              <option value="circle">🟡 Круглый медальон</option>
+              <option value="cutout">✂️ Вырез по силуэту</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="toggles">
+          <div class="chk-btn on" id="btn-ring" onclick="toggleOpt('ring')">🔗 Ушко брелока: ВКЛ</div>
+          <div class="chk-btn on" id="btn-frame" onclick="toggleOpt('frame')">🖼️ Рамка по краю: ВКЛ</div>
+        </div>
+      </div>
+
+      <!-- ВКЛАДКА 2: СПЕЦ-ШАБЛОНЫ -->
+      <div class="tab-panel" id="tab-1">
+        <div class="preset-card">
+          <div class="preset-title"><span>🎙️ 3D-Брелок «Звуковая волна»</span><span style="font-size:10px;color:#94a3b8">Хит подарков</span></div>
+          <input type="text" id="wave-label" placeholder="Подпись (напр: Я тебя люблю / 2026)" value="VOICE WAVE">
+          <div class="grid-2">
+            <button class="action-btn rec" id="rec-btn" onclick="recordVoiceWave()">🔴 Записать голос</button>
+            <button class="action-btn" onclick="generateSynthWave()">🎵 Случайная волна</button>
+          </div>
+        </div>
+
+        <div class="preset-card">
+          <div class="preset-title"><span>📱 3D QR-Код (Визитка / Wi-Fi / ТГ)</span><span style="font-size:10px;color:#94a3b8">Сканируется!</span></div>
+          <input type="text" id="qr-input" placeholder="Ссылка или текст" value="https://t.me/telegram">
+          <button class="action-btn" onclick="generateQR3D()">⚡ Сгенерировать 3D QR-Табличку</button>
+        </div>
+
+        <div class="preset-card">
+          <div class="preset-title"><span>🚗 Брелок «Госномер Авто»</span><span style="font-size:10px;color:#94a3b8">Сувенир</span></div>
+          <div class="grid-2">
+            <input type="text" id="plate-num" placeholder="Номер (А777АА)" value="А777АА" maxlength="6">
+            <input type="text" id="plate-reg" placeholder="Регион (777)" value="777" maxlength="3">
+          </div>
+          <button class="action-btn" onclick="generateLicensePlate()">🚘 Собрать 3D-Автономер</button>
+        </div>
+      </div>
+
+      <!-- ВКЛАДКА 3: ТЕКСТ И ФОТО -->
+      <div class="tab-panel" id="tab-2">
+        <div class="ctrl-group">
+          <div class="ctrl-head"><span>Добавить 3D-надпись поверх модели</span></div>
+          <input type="text" id="t-text" placeholder="Введите имя, дату или тег..." value="" oninput="onSlider()">
+        </div>
+
+        <div class="grid-2">
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>Тип букв</span></div>
+            <select id="t-mode" onchange="rebuildMesh()">
+              <option value="emboss">🔼 Выпуклые (+Z)</option>
+              <option value="engrave">🔽 Гравировка (-Z)</option>
+            </select>
+          </div>
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>Позиция текста</span></div>
+            <select id="t-pos" onchange="rebuildMesh()">
+              <option value="bottom">⬇️ Снизу на плашке</option>
+              <option value="top">⬆️ Сверху</option>
+              <option value="center">🎯 По центру</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="ctrl-group">
+          <div class="ctrl-head"><span>Размер шрифта</span><b id="v-tsize">14%</b></div>
+          <input type="range" id="s-tsize" min="7" max="28" step="1" value="14" oninput="onSlider()">
+        </div>
+
+        <div class="grid-2">
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>Контраст фото</span><b id="v-contrast">100%</b></div>
+            <input type="range" id="s-contrast" min="50" max="220" step="5" value="100" oninput="onSlider()">
+          </div>
+          <div class="ctrl-group">
+            <div class="ctrl-head"><span>Отсечка фона</span><b id="v-thresh">0%</b></div>
+            <input type="range" id="s-thresh" min="0" max="80" step="2" value="0" oninput="onSlider()">
+          </div>
+        </div>
+
+        <div class="ctrl-group">
+          <div class="ctrl-head"><span>Плотность STL-сетки</span><b id="v-res">95 × 95</b></div>
+          <input type="range" id="s-res" min="55" max="165" step="10" value="95" onchange="rebuildMesh()" oninput="document.getElementById('v-res').textContent = this.value + ' × ' + this.value">
+        </div>
+
+        <div class="toggles">
+          <div class="chk-btn" id="btn-inv" onclick="toggleOpt('inv')">🌗 Инверсия: ВЫКЛ</div>
+          <div class="chk-btn on" id="btn-smooth" onclick="toggleOpt('smooth')">🌊 Сглаживание: ВКЛ</div>
+        </div>
+      </div>
+
+      <!-- ВКЛАДКА 4: КАЛЬКУЛЯТОР ПРИБЫЛИ -->
+      <div class="tab-panel" id="tab-3">
+        <div class="ctrl-group">
+          <div class="ctrl-head"><span>Цена катушки пластика (за 1 кг)</span><b id="v-spool">1600 ₽</b></div>
+          <input type="range" id="s-spool" min="800" max="4000" step="100" value="1600" oninput="updateCostCalc()">
+        </div>
+        <div class="ctrl-group">
+          <div class="ctrl-head"><span>Заполнение при 3D-печати (Infill)</span><b id="v-infill">25%</b></div>
+          <input type="range" id="s-infill" min="15" max="100" step="5" value="25" oninput="updateCostCalc()">
+        </div>
+        <div class="ctrl-group">
+          <div class="ctrl-head"><span>Наценка мастера / Маржа</span><b id="v-markup">×12</b></div>
+          <input type="range" id="s-markup" min="3" max="25" step="1" value="12" oninput="updateCostCalc()">
+        </div>
+        <div class="preset-card" id="biz-summary" style="line-height: 1.5; font-size: 12px; color: #cbd5e1;"></div>
+      </div>
+    </div>
+
+    <div class="side-footer">
+      <button class="export-btn" id="dl-btn" onclick="handleExportClick()">💾 Скачать 3D-файл (.STL)</button>
+      <button class="order-btn" onclick="openOrderModal()">📦 Заказать готовую 3D-печать с доставкой</button>
+    </div>
+  </div>
+</div>
+
+<!-- МОДАЛЬНОЕ ОКНО: ОПЛАТА TELEGRAM STARS -->
+<div class="modal-backdrop" id="pay-modal">
+  <div class="modal-box">
+    <div class="m-title">⭐ Выгрузка 3D-модели (.STL)</div>
+    <div class="m-sub">Бесплатный пробный лимит исчерпан. Выберите тариф для мгновенного скачивания файла высокой чёткости и отправки его вам в чат Telegram:</div>
+
+    <div class="pay-card" onclick="buyWithStars('single')">
+      <div>
+        <div style="font-weight:bold; font-size:14px; color:#38bdf8;">📄 Разовая выгрузка (+1 STL)</div>
+        <div style="font-size:11px; color:#94a3b8; margin-top:2px;">Скачивание файла + дубликат в чат бота</div>
+      </div>
+      <div class="star-badge">25 ⭐</div>
+    </div>
+
+    <div class="pay-card vip" onclick="buyWithStars('pro')">
+      <div>
+        <div style="font-weight:bold; font-size:14px; color:#fbbf24;">👑 VIP-Безлимит PRO навсегда</div>
+        <div style="font-size:11px; color:#fde68a; margin-top:2px;">Неограниченное скачивание любых 3D-моделей</div>
+      </div>
+      <div class="star-badge">150 ⭐</div>
+    </div>
+
+    <div class="close-link" onclick="closePayModal()">Вернуться к редактированию модели</div>
+  </div>
+</div>
+
+<!-- МОДАЛЬНОЕ ОКНО: ЗАКАЗ ФИЗИЧЕСКОЙ ПЕЧАТИ -->
+<div class="modal-backdrop" id="order-modal">
+  <div class="modal-box">
+    <div class="m-title">📦 Заказ готового 3D-изделия</div>
+    <div class="m-sub" id="order-modal-sub">Мы распечатаем вашу модель на 3D-принтере и отправим доставкой (СДЭК / Авито / Почта).</div>
+
+    <div class="ctrl-group">
+      <div class="ctrl-head"><span>Ваш Telegram (@username) или телефон для связи</span></div>
+      <input type="text" id="client-contact" placeholder="Например: @ivan_tg или +7 999 ...">
+    </div>
+
+    <div class="ctrl-group">
+      <div class="ctrl-head"><span>Пожелания (цвет пластика, город доставки)</span></div>
+      <textarea id="client-comment" rows="2" placeholder="Например: Хочу из золотого пластика, доставка в Москву"></textarea>
+    </div>
+
+    <button class="order-btn" style="padding:12px; font-size:13px;" onclick="submitOrderLead()">✅ Отправить заявку мастеру</button>
+    <div class="close-link" onclick="closeOrderModal()">Отмена</div>
+  </div>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+let tgUser = { id: 0, username: "guest", first_name: "Гость" };
+if (tg) {
+  tg.ready();
+  tg.expand();
+  if (tg.initDataUnsafe?.user) tgUser = tg.initDataUnsafe.user;
+}
+
+// Пинг-пульс каждые 20 сек, чтобы туннель не засыпал
+setInterval(() => { fetch('/api/ping').catch(() => {}); }, 20000);
+
+let billing = { freeLeft: 1, isPro: false };
+try {
+  const saved = JSON.parse(localStorage.getItem('stl_studio_billing'));
+  if (saved) billing = { ...billing, ...saved };
+} catch(e) {}
+
+function saveBilling() {
+  try { localStorage.setItem('stl_studio_billing', JSON.stringify(billing)); } catch(e) {}
+  const badge = document.getElementById('quota-badge');
+  const dlBtn = document.getElementById('dl-btn');
+  if (billing.isPro) {
+    badge.textContent = '👑 VIP PRO: Безлимит';
+    badge.className = 'quota-pill pro';
+    dlBtn.textContent = '💾 Скачать 3D-файл (.STL) + в чат';
+  } else if (billing.freeLeft > 0) {
+    badge.textContent = `🎁 Беспл. скачиваний: ${billing.freeLeft}`;
+    badge.className = 'quota-pill';
+    dlBtn.textContent = `💾 Скачать .STL (${billing.freeLeft} беспл.)`;
+  } else {
+    badge.textContent = '⭐ Купить выгрузку';
+    badge.className = 'quota-pill';
+    dlBtn.textContent = '⭐ Скачать 3D-файл (.STL) — 25 Stars';
+  }
+}
+
+let opts = { ring: true, frame: true, inv: false, smooth: true, backlight: false, wire: false, autoRot: false };
+let sourceImg = new Image();
+let imgAspect = 1.0;
+let currentGeometry = null;
+let sizeX = 65, sizeY = 65, sizeZ = 4.0;
+let modelVolumeCm3 = 8.5;
+let calcWeightG = 10, calcCostRub = 20, calcRetailRub = 350;
+
+// ================= THREE.JS СЦЕНА =================
+const vp = document.getElementById('viewport');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(42, vp.clientWidth / vp.clientHeight, 0.1, 1200);
+camera.position.set(0, -75, 90);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+renderer.setSize(vp.clientWidth, vp.clientHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+vp.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+const ambLight = new THREE.AmbientLight(0xffffff, 0.48);
+scene.add(ambLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.88);
+dirLight.position.set(45, -55, 80);
+scene.add(dirLight);
+const backLight = new THREE.PointLight(0xffb74d, 0, 180);
+backLight.position.set(0, 10, -25);
+scene.add(backLight);
+
+const gridHelper = new THREE.GridHelper(180, 18, 0x2dd4bf, 0x1e293b);
+gridHelper.rotation.x = Math.PI / 2;
+gridHelper.position.z = -0.2;
+scene.add(gridHelper);
+
+let meshObj = null;
+const FILAMENTS = {
+  sky:     { color: 0x38bdf8, roughness: 0.35, metalness: 0.15 },
+  gold:    { color: 0xfbbf24, roughness: 0.22, metalness: 0.65 },
+  ivory:   { color: 0xfffbeb, roughness: 0.55, metalness: 0.0  },
+  emerald: { color: 0x10b981, roughness: 0.30, metalness: 0.20 },
+  copper:  { color: 0xea580c, roughness: 0.25, metalness: 0.60 },
+  carbon:  { color: 0x334155, roughness: 0.45, metalness: 0.30 }
+};
+
+const matStandard = new THREE.MeshStandardMaterial({ ...FILAMENTS.sky, side: THREE.DoubleSide });
+const matLitho = new THREE.MeshStandardMaterial({ color: 0xfffbeb, roughness: 0.5, metalness: 0.0, side: THREE.DoubleSide });
+
+function handleViewportResize() {
+  const w = vp.clientWidth, h = vp.clientHeight;
+  if (w === 0 || h === 0) return;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+window.addEventListener('resize', handleViewportResize);
+setTimeout(handleViewportResize, 50);
+
+function switchTab(idx) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
+  document.querySelectorAll('.tab-panel').forEach((p, i) => p.classList.toggle('active', i === idx));
+}
+
+function changeFilament(key) {
+  const f = FILAMENTS[key] || FILAMENTS.sky;
+  matStandard.color.setHex(f.color);
+  matStandard.roughness = f.roughness;
+  matStandard.metalness = f.metalness;
+  matStandard.needsUpdate = true;
+}
+
+function toggleWireframe() {
+  opts.wire = !opts.wire;
+  matStandard.wireframe = opts.wire;
+  matLitho.wireframe = opts.wire;
+  document.getElementById('wire-btn').classList.toggle('active', opts.wire);
+}
+
+function toggleAutoRotate() {
+  opts.autoRot = !opts.autoRot;
+  controls.autoRotate = opts.autoRot;
+  controls.autoRotateSpeed = 2.5;
+  document.getElementById('rot-btn').classList.toggle('active', opts.autoRot);
+}
+
+function resetCam() {
+  camera.position.set(0, -Math.max(sizeX, sizeY) * 1.1, Math.max(sizeX, sizeY) * 1.25);
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
+
+// ================= СПЕЦ-ШАБЛОНЫ =================
+function drawWaveformCanvas(bars, labelText) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 190;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
+
+  const count = bars.length;
+  const startX = 36, usableW = c.width - 72;
+  const step = usableW / count;
+  const barW = Math.max(3, step * 0.62);
+  const centerY = labelText ? 76 : 95;
+  const maxH = labelText ? 105 : 140;
+
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < count; i++) {
+    let h = Math.max(12, bars[i] * maxH);
+    let x = startX + i * step;
+    let y = centerY - h / 2;
+    ctx.beginPath();
+    ctx.roundRect(x, y, barW, h, 3);
+    ctx.fill();
+  }
+
+  if (labelText) {
+    ctx.font = '900 28px "Segoe UI", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(labelText.toUpperCase(), c.width / 2, 162);
+  }
+
+  document.getElementById('s-width').value = 85;
+  document.getElementById('v-width').textContent = '85 мм';
+  document.getElementById('shape-sel').value = 'rect';
+  document.getElementById('mode-sel').value = 'relief';
+  opts.smooth = false;
+  sourceImg.onload = () => { imgAspect = c.height / c.width; rebuildMesh(); resetCam(); };
+  sourceImg.src = c.toDataURL();
+}
+
+function generateSynthWave() {
+  const label = document.getElementById('wave-label').value.trim();
+  const bars = [];
+  for (let i = 0; i < 38; i++) {
+    let env = Math.sin((i / 37) * Math.PI);
+    let val = 0.15 + env * (0.35 + Math.abs(Math.sin(i * 0.75)) * 0.5);
+    bars.push(Math.min(1, val));
+  }
+  drawWaveformCanvas(bars, label);
+}
+
+async function recordVoiceWave() {
+  const btn = document.getElementById('rec-btn');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+
+    const samples = [];
+    btn.textContent = '🎙️ Говорите (2.5 сек)...';
+    for (let i = 0; i < 38; i++) {
+      await new Promise(r => setTimeout(r, 65));
+      analyser.getByteTimeDomainData(data);
+      let maxAmp = 0;
+      for (let j = 0; j < data.length; j++) {
+        let a = Math.abs(data[j] - 128) / 128.0;
+        if (a > maxAmp) maxAmp = a;
+      }
+      samples.push(Math.min(1.0, 0.15 + maxAmp * 2.4));
+    }
+    stream.getTracks().forEach(t => t.stop());
+    audioCtx.close();
+    btn.textContent = '🔴 Записать голос';
+    drawWaveformCanvas(samples, document.getElementById('wave-label').value.trim());
+  } catch (err) {
+    btn.textContent = '🔴 Записать голос';
+    generateSynthWave();
+  }
+}
+
+function generateQR3D() {
+  const text = document.getElementById('qr-input').value.trim() || 'https://t.me';
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const count = qr.getModuleCount();
+
+  const c = document.createElement('canvas');
+  c.width = c.height = 360;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 360, 360);
+
+  const margin = 32;
+  const cell = (360 - margin * 2) / count;
+  ctx.fillStyle = '#fff';
+  for (let r = 0; r < count; r++) {
+    for (let col = 0; col < count; col++) {
+      if (qr.isDark(r, col)) {
+        ctx.fillRect(margin + col * cell, margin + r * cell, Math.ceil(cell), Math.ceil(cell));
+      }
+    }
+  }
+
+  document.getElementById('s-width').value = 60;
+  document.getElementById('v-width').textContent = '60 мм';
+  document.getElementById('s-res').value = 135;
+  document.getElementById('v-res').textContent = '135 × 135';
+  document.getElementById('mode-sel').value = 'relief';
+  document.getElementById('shape-sel').value = 'rect';
+  opts.smooth = false;
+  sourceImg.onload = () => { imgAspect = 1.0; rebuildMesh(); resetCam(); };
+  sourceImg.src = c.toDataURL();
+}
+
+function generateLicensePlate() {
+  const num = (document.getElementById('plate-num').value || 'А777АА').toUpperCase();
+  const reg = (document.getElementById('plate-reg').value || '777').toUpperCase();
+
+  const c = document.createElement('canvas');
+  c.width = 520; c.height = 140;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(380, 8, 8, 124);
+  ctx.font = '900 74px "Segoe UI", Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(num, 195, 74);
+
+  ctx.font = '900 50px "Segoe UI", Arial, sans-serif';
+  ctx.fillText(reg, 450, 52);
+  ctx.font = 'bold 26px "Segoe UI", Arial, sans-serif';
+  ctx.fillText('RUS', 450, 106);
+
+  document.getElementById('s-width').value = 80;
+  document.getElementById('v-width').textContent = '80 мм';
+  document.getElementById('s-res').value = 125;
+  document.getElementById('v-res').textContent = '125 × 125';
+  document.getElementById('mode-sel').value = 'relief';
+  document.getElementById('shape-sel').value = 'rect';
+  opts.smooth = false;
+  sourceImg.onload = () => { imgAspect = c.height / c.width; rebuildMesh(); resetCam(); };
+  sourceImg.src = c.toDataURL();
+}
+
+function createDefaultEmblem() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 256, 256);
+
+  ctx.save();
+  ctx.translate(128, 128);
+  ctx.fillStyle = '#999';
+  for (let i = 0; i < 12; i++) {
+    ctx.rotate(Math.PI / 6);
+    ctx.fillRect(-14, -108, 28, 216);
+  }
+  ctx.beginPath(); ctx.arc(0, 0, 86, 0, Math.PI * 2); ctx.fillStyle = '#ccc'; ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, 64, 0, Math.PI * 2); ctx.fillStyle = '#181818'; ctx.fill();
+
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    let a1 = (i * 72 - 90) * Math.PI / 180;
+    let a2 = ((i * 72 + 36) - 90) * Math.PI / 180;
+    ctx.lineTo(Math.cos(a1) * 54, Math.sin(a1) * 54);
+    ctx.lineTo(Math.cos(a2) * 22, Math.sin(a2) * 22);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  sourceImg.onload = () => { imgAspect = 1.0; rebuildMesh(); };
+  sourceImg.src = c.toDataURL();
+}
+
+document.getElementById('img-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    sourceImg.onload = () => {
+      imgAspect = sourceImg.height / sourceImg.width;
+      rebuildMesh();
+      resetCam();
+    };
+    sourceImg.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+function toggleOpt(key) {
+  opts[key] = !opts[key];
+  const btn = document.getElementById('btn-' + key);
+  const titles = { ring: '🔗 Ушко брелока', frame: '🖼️ Рамка по краю', inv: '🌗 Инверсия', smooth: '🌊 Сглаживание' };
+  btn.textContent = `${titles[key]}: ${opts[key] ? 'ВКЛ' : 'ВЫКЛ'}`;
+  btn.className = 'chk-btn' + (opts[key] ? ' on' : '');
+  rebuildMesh();
+}
+
+function toggleBacklight() {
+  opts.backlight = !opts.backlight;
+  document.getElementById('backlight-btn').classList.toggle('active', opts.backlight);
+  if (opts.backlight) document.getElementById('mode-sel').value = 'litho';
+  rebuildMesh();
+}
+
+let sliderTimer = null;
+function onSlider() {
+  document.getElementById('v-width').textContent = document.getElementById('s-width').value + ' мм';
+  document.getElementById('v-rel').textContent = document.getElementById('s-rel').value + ' мм';
+  document.getElementById('v-base').textContent = document.getElementById('s-base').value + ' мм';
+  document.getElementById('v-tsize').textContent = document.getElementById('s-tsize').value + '%';
+  document.getElementById('v-contrast').textContent = document.getElementById('s-contrast').value + '%';
+  document.getElementById('v-thresh').textContent = document.getElementById('s-thresh').value + '%';
+  clearTimeout(sliderTimer);
+  sliderTimer = setTimeout(rebuildMesh, 35);
+}
+
+// ================= ПОСТРОЕНИЕ 3D-МОДЕЛИ =================
+function rebuildMesh() {
+  const mode = document.getElementById('mode-sel').value;
+  const shape = document.getElementById('shape-sel').value;
+  const curveMode = document.getElementById('curve-sel').value;
+  const widthMM = parseFloat(document.getElementById('s-width').value);
+  const relMM = parseFloat(document.getElementById('s-rel').value);
+  const baseMM = parseFloat(document.getElementById('s-base').value);
+  const frameMM = opts.frame ? 2.2 : 0;
+  const res = parseInt(document.getElementById('s-res').value);
+
+  const contrast = parseFloat(document.getElementById('s-contrast').value) / 100.0;
+  const thresh = parseFloat(document.getElementById('s-thresh').value) / 100.0;
+
+  const customText = document.getElementById('t-text').value.trim();
+  const textMode = document.getElementById('t-mode').value;
+  const textPos = document.getElementById('t-pos').value;
+  const textSizePct = parseFloat(document.getElementById('s-tsize').value) / 100.0;
+
+  const nx = res;
+  const ny = Math.max(28, Math.round(res * imgAspect));
+  sizeX = widthMM;
+  sizeY = +(widthMM * imgAspect).toFixed(2);
+  sizeZ = +(baseMM + relMM).toFixed(2);
+
+  const c = document.createElement('canvas');
+  c.width = nx; c.height = ny;
+  const ctx = c.getContext('2d');
+  if (mode === 'stamp') { ctx.translate(nx, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(sourceImg, 0, 0, nx, ny);
+  const imgData = ctx.getImageData(0, 0, nx, ny).data;
+
+  let textData = null;
+  if (customText.length > 0) {
+    const tc = document.createElement('canvas');
+    tc.width = nx; tc.height = ny;
+    const tctx = tc.getContext('2d');
+    if (mode === 'stamp') { tctx.translate(nx, 0); tctx.scale(-1, 1); }
+    const fontPx = Math.max(10, Math.round(ny * textSizePct));
+    let ty = ny * 0.85;
+    if (textPos === 'top') ty = ny * 0.16;
+    if (textPos === 'center') ty = ny * 0.52;
+
+    if (textPos !== 'center') {
+      tctx.fillStyle = '#404040';
+      tctx.fillRect(0, ty - fontPx * 0.78, nx, fontPx * 1.35);
+    }
+    tctx.font = `900 ${fontPx}px "Segoe UI", Arial, sans-serif`;
+    tctx.textAlign = 'center';
+    tctx.textBaseline = 'middle';
+    tctx.fillStyle = '#ffffff';
+    tctx.fillText(customText, nx / 2, ty);
+    textData = tctx.getImageData(0, 0, nx, ny).data;
+  }
+
+  let rawH = new Float32Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      let idx = (j * nx + i) * 4;
+      let lum = (0.299 * imgData[idx] + 0.587 * imgData[idx+1] + 0.114 * imgData[idx+2]) / 255.0;
+      let alpha = imgData[idx+3] / 255.0;
+      if (alpha < 0.1) lum = 0;
+      if (opts.inv) lum = 1.0 - lum;
+
+      lum = (lum - 0.5) * contrast + 0.5;
+      lum = Math.max(0, Math.min(1, lum));
+      if (lum < thresh) lum = 0;
+
+      if (mode === 'litho') lum = 1.0 - lum;
+      if (mode === 'voxel') lum = Math.round(lum * 4) / 4;
+      if (mode === 'stamp') lum = lum > 0.45 ? 1.0 : 0.0;
+      rawH[j * nx + i] = lum;
+    }
+  }
+
+  let hMap = new Float32Array(nx * ny);
+  if (opts.smooth && mode !== 'voxel' && mode !== 'stamp') {
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        let sum = 0, cnt = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            let x = i + dx, y = j + dy;
+            if (x >= 0 && x < nx && y >= 0 && y < ny) { sum += rawH[y * nx + x]; cnt++; }
+          }
+        }
+        hMap[j * nx + i] = sum / cnt;
+      }
+    }
+  } else {
+    hMap = rawH;
+  }
+
+  if (textData) {
+    for (let k = 0; k < nx * ny; k++) {
+      let r = textData[k * 4];
+      if (r > 200) hMap[k] = (textMode === 'emboss') ? 1.0 : -0.32;
+      else if (r > 40) hMap[k] = 0.25;
+    }
+  }
+
+  const useRing = opts.ring && (curveMode === 'flat');
+  const lugRows = useRing ? Math.max(8, Math.round(ny * 0.16)) : 0;
+  const totalNy = ny + lugRows;
+  const cellW = widthMM / (nx - 1);
+  const cellH = sizeY / (ny - 1);
+
+  const active = new Uint8Array((nx - 1) * (totalNy - 1));
+  const zVert = new Float32Array(nx * totalNy);
+
+  const ringCenterX = 0;
+  const ringCenterY = sizeY / 2 + lugRows * cellH * 0.45;
+  const ringOuterR = Math.min(widthMM, sizeY) * 0.15;
+  const ringInnerR = ringOuterR * 0.48;
+
+  for (let j = 0; j < totalNy; j++) {
+    let py = (totalNy - 1 - j) * cellH - sizeY / 2;
+    for (let i = 0; i < nx; i++) {
+      let px = (i / (nx - 1) - 0.5) * widthMM;
+      let imgJ = j - lugRows;
+
+      if (imgJ < 0) {
+        zVert[j * nx + i] = baseMM + relMM * 0.5;
+      } else {
+        let hVal = hMap[imgJ * nx + i];
+        let distEdgeX = (widthMM / 2) - Math.abs(px);
+        let distEdgeY = (sizeY / 2) - Math.abs(py);
+        if (frameMM > 0) {
+          if (shape === 'rect' && (distEdgeX < frameMM || distEdgeY < frameMM)) hVal = Math.max(hVal, 0.85);
+          if (shape === 'circle') {
+            let r = Math.hypot(px / (widthMM / 2), py / (sizeY / 2));
+            let fNorm = frameMM / (widthMM / 2);
+            if (r > 1.0 - fNorm && r <= 1.0) hVal = Math.max(hVal, 0.85);
+          }
+        }
+        if (curveMode === 'stand' && imgJ >= ny * 0.90) {
+          zVert[j * nx + i] = baseMM + relMM + 9.0;
+        } else {
+          zVert[j * nx + i] = Math.max(0.4, baseMM + hVal * relMM);
+        }
+      }
+    }
+  }
+
+  for (let j = 0; j < totalNy - 1; j++) {
+    let py = (totalNy - 1 - (j + 0.5)) * cellH - sizeY / 2;
+    for (let i = 0; i < nx - 1; i++) {
+      let px = ((i + 0.5) / (nx - 1) - 0.5) * widthMM;
+      let imgJ = j - lugRows;
+      let isAct = false;
+
+      if (useRing) {
+        let dRing = Math.hypot(px - ringCenterX, py - ringCenterY);
+        if (dRing <= ringOuterR && dRing >= ringInnerR) isAct = true;
+        if (dRing < ringInnerR) { active[j * (nx - 1) + i] = 0; continue; }
+      }
+
+      if (imgJ >= 0) {
+        if (shape === 'rect') isAct = true;
+        else if (shape === 'circle') {
+          let r = Math.hypot(px / (widthMM / 2), py / (sizeY / 2));
+          if (r <= 1.0) isAct = true;
+        } else if (shape === 'cutout') {
+          if (hMap[imgJ * nx + i] > 0.06) isAct = true;
+        }
+      }
+      active[j * (nx - 1) + i] = isAct ? 1 : 0;
+    }
+  }
+
+  let arcRad = 0;
+  if (curveMode === 'arc100') arcRad = 100 * Math.PI / 180;
+  if (curveMode === 'arc180') arcRad = 178 * Math.PI / 180;
+  const R = arcRad > 0 ? (widthMM / arcRad) : 0;
+  const zOffset = arcRad > 0 ? R * Math.cos(arcRad / 2) : 0;
+
+  function mapPt(x, y, z) {
+    if (arcRad === 0) return [x, y, z];
+    let theta = x / R;
+    let r = R + z;
+    return [r * Math.sin(theta), y, r * Math.cos(theta) - zOffset];
+  }
+
+  const positions = [];
+  function addTri(x1, y1, z1, x2, y2, z2, x3, y3, z3) {
+    const p1 = mapPt(x1, y1, z1), p2 = mapPt(x2, y2, z2), p3 = mapPt(x3, y3, z3);
+    positions.push(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
+  }
+  function getX(i) { return (i / (nx - 1) - 0.5) * widthMM; }
+  function getY(j) { return (totalNy - 1 - j) * cellH - sizeY / 2; }
+  function isCellActive(i, j) {
+    if (i < 0 || i >= nx - 1 || j < 0 || j >= totalNy - 1) return false;
+    return active[j * (nx - 1) + i] === 1;
+  }
+
+  let volMm3 = 0;
+  const cellArea = cellW * cellH;
+
+  for (let j = 0; j < totalNy - 1; j++) {
+    for (let i = 0; i < nx - 1; i++) {
+      if (!isCellActive(i, j)) continue;
+
+      let x0 = getX(i), x1 = getX(i + 1);
+      let y0 = getY(j), y1 = getY(j + 1);
+      let z00 = zVert[j * nx + i], z10 = zVert[j * nx + (i + 1)];
+      let z01 = zVert[(j + 1) * nx + i], z11 = zVert[(j + 1) * nx + (i + 1)];
+
+      volMm3 += cellArea * ((z00 + z10 + z01 + z11) * 0.25);
+
+      addTri(x0, y0, z00, x0, y1, z01, x1, y1, z11);
+      addTri(x0, y0, z00, x1, y1, z11, x1, y0, z10);
+      addTri(x0, y0, 0, x1, y1, 0, x0, y1, 0);
+      addTri(x0, y0, 0, x1, y0, 0, x1, y1, 0);
+
+      if (!isCellActive(i, j - 1)) {
+        addTri(x0, y0, z00, x1, y0, z10, x1, y0, 0);
+        addTri(x0, y0, z00, x1, y0, 0, x0, y0, 0);
+      }
+      if (!isCellActive(i, j + 1)) {
+        addTri(x1, y1, z11, x0, y1, z01, x0, y1, 0);
+        addTri(x1, y1, z11, x0, y1, 0, x1, y1, 0);
+      }
+      if (!isCellActive(i - 1, j)) {
+        addTri(x0, y1, z01, x0, y0, z00, x0, y0, 0);
+        addTri(x0, y1, z01, x0, y0, 0, x0, y1, 0);
+      }
+      if (!isCellActive(i + 1, j)) {
+        addTri(x1, y0, z10, x1, y1, z11, x1, y1, 0);
+        addTri(x1, y0, z10, x1, y1, 0, x1, y0, 0);
+      }
+    }
+  }
+
+  modelVolumeCm3 = Math.max(0.5, volMm3 / 1000.0);
+
+  if (meshObj) {
+    scene.remove(meshObj);
+    meshObj.geometry.dispose();
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.computeVertexNormals();
+  geom.computeBoundingBox();
+  currentGeometry = geom;
+
+  if (opts.backlight) {
+    backLight.intensity = 2.4;
+    dirLight.intensity = 0.15;
+    meshObj = new THREE.Mesh(geom, matLitho);
+  } else {
+    backLight.intensity = 0;
+    dirLight.intensity = 0.88;
+    meshObj = new THREE.Mesh(geom, matStandard);
+  }
+  scene.add(meshObj);
+
+  const bb = geom.boundingBox;
+  const dx = (bb.max.x - bb.min.x).toFixed(1);
+  const dy = (bb.max.y - bb.min.y).toFixed(1);
+  const dz = (bb.max.z - bb.min.z).toFixed(1);
+  const triCount = positions.length / 9;
+  document.getElementById('dim-info').innerHTML =
+    `Габариты: <b>${dx} × ${dy} × ${dz} мм</b> (${(triCount/1000).toFixed(1)}k тр.)`;
+
+  updateCostCalc();
+}
+
+function updateCostCalc() {
+  const spoolPrice = parseFloat(document.getElementById('s-spool').value);
+  const infillPct = parseFloat(document.getElementById('s-infill').value) / 100.0;
+  const markup = parseFloat(document.getElementById('s-markup').value);
+
+  document.getElementById('v-spool').textContent = spoolPrice + ' ₽';
+  document.getElementById('v-infill').textContent = Math.round(infillPct * 100) + '%';
+  document.getElementById('v-markup').textContent = '×' + markup;
+
+  const effDensity = 1.24 * (0.42 + 0.58 * infillPct);
+  calcWeightG = +(modelVolumeCm3 * effDensity).toFixed(1);
+  calcCostRub = Math.ceil(calcWeightG * (spoolPrice / 1000.0));
+  calcRetailRub = Math.ceil((calcCostRub * markup) / 10) * 10;
+  const printTimeMin = Math.max(12, Math.round(calcWeightG * 3.2));
+
+  document.getElementById('vol-info').innerHTML =
+    `Вес: <b>${calcWeightG} г</b> (${modelVolumeCm3.toFixed(1)} см³)`;
+  document.getElementById('price-info').textContent =
+    `Себестоимость: ${calcCostRub} ₽ | Продажа: ~${calcRetailRub} ₽`;
+
+  document.getElementById('biz-summary').innerHTML = `
+    <div>📦 <b>Чистый объём модели:</b> ${modelVolumeCm3.toFixed(2)} см³</div>
+    <div>⚖️ <b>Расход пластика (PETG/PLA):</b> ${calcWeightG} г</div>
+    <div>⏱️ <b>Примерное время печати:</b> ~${printTimeMin} мин</div>
+    <div>🔌 <b>Затраты на пластик:</b> ${calcCostRub} ₽</div>
+    <div style="margin-top:4px; color:#34d399; font-size:13px;">💵 <b>Рекомендуемая цена клиенту: ${calcRetailRub} ₽</b> (Чистая прибыль: +${calcRetailRub - calcCostRub} ₽)</div>
+  `;
+}
+
+// ================= МОНЕТИЗАЦИЯ TELEGRAM STARS И ВЫГРУЗКА =================
+function openPayModal() { document.getElementById('pay-modal').style.display = 'flex'; }
+function closePayModal() { document.getElementById('pay-modal').style.display = 'none'; }
+
+function handleExportClick() {
+  if (billing.isPro) {
+    executeBinarySTLExport();
+  } else if (billing.freeLeft > 0) {
+    billing.freeLeft--;
+    saveBilling();
+    executeBinarySTLExport();
+  } else {
+    openPayModal();
+  }
+}
+
+async function buyWithStars(plan) {
+  try {
+    const resp = await fetch('/api/create_invoice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan, user_id: tgUser.id })
+    });
+    const data = await resp.json();
+
+    if (data.invoice_link && tg?.openInvoice) {
+      tg.openInvoice(data.invoice_link, status => {
+        if (status === 'paid') {
+          if (plan === 'pro') billing.isPro = true;
+          else billing.freeLeft += 1;
+          saveBilling();
+          closePayModal();
+          executeBinarySTLExport();
+        }
+      });
+    } else {
+      if (confirm('Тестовый режим браузера: симулировать успешную оплату Telegram Stars?')) {
+        if (plan === 'pro') billing.isPro = true;
+        else billing.freeLeft += 1;
+        saveBilling();
+        closePayModal();
+        executeBinarySTLExport();
+      }
+    }
+  } catch (e) {
+    alert('Ошибка создания счёта. Проверьте соединение с сервером.');
+  }
+}
+
+function buildSTLBuffer() {
+  const pos = currentGeometry.attributes.position.array;
+  const numTriangles = pos.length / 9;
+  const buffer = new ArrayBuffer(84 + numTriangles * 50);
+  const view = new DataView(buffer);
+  view.setUint32(80, numTriangles, true);
+
+  let offset = 84;
+  const pA = new THREE.Vector3(), pB = new THREE.Vector3(), pC = new THREE.Vector3();
+  const cb = new THREE.Vector3(), ab = new THREE.Vector3();
+
+  for (let i = 0; i < numTriangles; i++) {
+    let idx = i * 9;
+    pA.set(pos[idx], pos[idx+1], pos[idx+2]);
+    pB.set(pos[idx+3], pos[idx+4], pos[idx+5]);
+    pC.set(pos[idx+6], pos[idx+7], pos[idx+8]);
+
+    cb.subVectors(pC, pB);
+    ab.subVectors(pA, pB);
+    cb.cross(ab).normalize();
+
+    view.setFloat32(offset, cb.x, true); offset += 4;
+    view.setFloat32(offset, cb.y, true); offset += 4;
+    view.setFloat32(offset, cb.z, true); offset += 4;
+
+    for (let k = 0; k < 9; k++) {
+      view.setFloat32(offset, pos[idx + k], true);
+      offset += 4;
+    }
+    view.setUint16(offset, 0, true); offset += 2;
+  }
+  return buffer;
+}
+
+async function executeBinarySTLExport() {
+  if (!currentGeometry) return;
+  const buffer = buildSTLBuffer();
+  const curve = document.getElementById('curve-sel').value;
+  const filename = `stl_studio_${curve}_${sizeX}mm.stl`;
+
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+
+  if (tgUser.id) {
+    const form = new FormData();
+    form.append('user_id', tgUser.id);
+    form.append('filename', filename);
+    form.append('caption', `🧊 Ваша 3D-модель готова!\n📐 ${document.getElementById('dim-info').innerText}\n⚖️ Вес: ${calcWeightG} г`);
+    form.append('file', blob, filename);
+    fetch('/api/send_stl', { method: 'POST', body: form }).catch(() => {});
+  }
+}
+
+function openOrderModal() {
+  document.getElementById('order-modal-sub').innerHTML =
+    `Расчётная стоимость готового изделия: <b style="color:#34d399">${calcRetailRub} ₽</b> (вес ${calcWeightG} г). Оставьте контакт, и мы свяжемся с вами в Telegram:`;
+  if (tgUser.username && tgUser.username !== 'guest') {
+    document.getElementById('client-contact').value = '@' + tgUser.username;
+  }
+  document.getElementById('order-modal').style.display = 'flex';
+}
+function closeOrderModal() { document.getElementById('order-modal').style.display = 'none'; }
+
+async function submitOrderLead() {
+  const contact = document.getElementById('client-contact').value.trim();
+  if (!contact) { alert('Пожалуйста, укажите ваш Telegram или телефон для связи!'); return; }
+
+  const payload = {
+    tg_id: tgUser.id,
+    tg_name: tgUser.first_name,
+    contact,
+    comment: document.getElementById('client-comment').value.trim() || 'Без комментария',
+    dim: document.getElementById('dim-info').innerText,
+    weight_g: calcWeightG,
+    cost_rub: calcCostRub,
+    retail_rub: calcRetailRub,
+    custom_text: document.getElementById('t-text').value.trim() || 'Нет'
+  };
+
+  try {
+    await fetch('/api/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    closeOrderModal();
+    alert('✅ Заявка принята! Мастер скоро напишет вам в Telegram.');
+  } catch (e) {
+    alert('Ошибка отправки. Попробуйте ещё раз.');
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+saveBilling();
+createDefaultEmblem();
+animate();
+</script>
+</body>
+</html>"""
+
+PUBLIC_URL = ""
+bot_instance: Bot = None
+TUNNEL_PROC = None
+LAST_START_MSG = {}
+KNOWN_CHATS = set()  # Хранит ID всех пользователей для мгновенного обновления синей кнопки меню
+
+async def handle_index(request):
+    return web.Response(text=APP_HTML, content_type="text/html")
+
+async def handle_ping(request):
+    return web.json_response({"ok": True})
+
+async def handle_create_invoice(request):
+    global bot_instance
+    data = await request.json()
+    plan = data.get("plan", "single")
+
+    if not bot_instance:
+        return web.json_response({"invoice_link": ""})
+
+    if plan == "pro":
+        title = "VIP-Безлимит STL Studio 3D PRO"
+        desc = "Неограниченная выгрузка любых 3D-моделей (.STL) высокой чёткости навсегда"
+        stars = PRICE_PRO_STARS
+    else:
+        title = "Выгрузка 3D-модели (.STL)"
+        desc = "Скачивание готового твердотельного 3D-файла для печати + копия в чат"
+        stars = PRICE_SINGLE_STARS
+
+    try:
+        link = await bot_instance.create_invoice_link(
+            title=title,
+            description=desc,
+            payload=f"stl_pay_{plan}",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label=title, amount=stars)]
+        )
+        return web.json_response({"invoice_link": link})
+    except Exception as e:
+        print(f"[Ошибка создания инвойса Stars]: {e}")
+        return web.json_response({"invoice_link": ""})
+
+async def handle_send_stl(request):
+    global bot_instance
+    if not bot_instance:
+        return web.json_response({"status": "no_bot"})
+
+    reader = await request.multipart()
+    user_id = 0
+    filename = "model.stl"
+    caption = "Ваша 3D-модель"
+    file_bytes = b""
+
+    async for field in reader:
+        if field.name == "user_id":
+            user_id = int((await field.read()).decode() or 0)
+        elif field.name == "filename":
+            filename = (await field.read()).decode()
+        elif field.name == "caption":
+            caption = (await field.read()).decode()
+        elif field.name == "file":
+            file_bytes = await field.read()
+
+    if user_id and file_bytes:
+        try:
+            doc = BufferedInputFile(file_bytes, filename=filename)
+            await bot_instance.send_document(chat_id=user_id, document=doc, caption=caption)
+        except Exception as e:
+            print(f"[Инфо] Не удалось отправить файл в чат {user_id}: {e}")
+
+    return web.json_response({"status": "ok"})
+
+async def handle_order(request):
+    global bot_instance, ADMIN_CHAT_ID
+    data = await request.json()
+
+    lead_text = (
+        "🔥 **НОВЫЙ ЗАКАЗ НА 3D-ПЕЧАТЬ!**\n\n"
+        f"👤 **Клиент:** {data.get('tg_name')} (`ID: {data.get('tg_id')}`)\n"
+        f"📞 **Контакт для связи:** `{data.get('contact')}`\n"
+        f"💬 **Пожелания:** {data.get('comment')}\n"
+        f"🔤 **Надпись на модели:** {data.get('custom_text')}\n\n"
+        f"📐 **{data.get('dim')}**\n"
+        f"⚖️ **Вес пластика:** {data.get('weight_g')} г (себестоимость ~{data.get('cost_rub')} ₽)\n"
+        f"💰 **Цена для клиента:** **{data.get('retail_rub')} ₽**\n"
+        f"📈 **Чистая прибыль:** +{int(data.get('retail_rub', 0)) - int(data.get('cost_rub', 0))} ₽"
+    )
+
+    print("\n" + "="*55)
+    print(lead_text.replace("**", "").replace("`", ""))
+    print("="*55 + "\n")
+
+    if bot_instance and ADMIN_CHAT_ID:
+        try:
+            await bot_instance.send_message(chat_id=ADMIN_CHAT_ID, text=lead_text, parse_mode="Markdown")
+        except Exception as e:
+            print(f"[Ошибка уведомления админа]: {e}")
+
+    return web.json_response({"status": "ok"})
+
+def get_fresh_webapp_url(base_url: str) -> str:
+    """Добавляет метку времени к URL, чтобы Telegram мгновенно сбрасывал старый кэш кнопки меню."""
+    if not base_url:
+        return ""
+    sep = "&" if "?" in base_url else "?"
+    return f"{base_url}{sep}v={int(time.time())}"
+
+async def update_telegram_buttons(new_url: str):
+    """Принудительно обновляет и глобальную синюю кнопку меню, и персональную кнопку для каждого чата."""
+    global bot_instance
+    if not bot_instance or not new_url:
+        return
+
+    fresh_url = get_fresh_webapp_url(new_url)
+    menu_btn = MenuButtonWebApp(text="🧊 3D Студия", web_app=WebAppInfo(url=fresh_url))
+
+    # 1. Обновляем кнопку по умолчанию для всех
+    try:
+        await bot_instance.set_chat_menu_button(menu_button=menu_btn)
+    except Exception:
+        pass
+
+    # 2. Принудительно перезаписываем синюю кнопку персонально в каждом активном чате (сбрасывает кэш клиента!)
+    for cid in list(KNOWN_CHATS):
+        try:
+            await bot_instance.set_chat_menu_button(chat_id=cid, menu_button=menu_btn)
+        except Exception:
+            pass
+
+    # 3. Обновляем инлайн-кнопку в последнем сообщении /start
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧊 Открыть 3D-Студию сувениров", web_app=WebAppInfo(url=fresh_url))]
+    ])
+    for chat_id, msg_id in list(LAST_START_MSG.items()):
+        try:
+            await bot_instance.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=kb)
+        except Exception:
+            pass
+
+async def tunnel_watchdog(port: int):
+    """Держит HTTPS-туннель открытым 24/7 и автоматически обновляет обе кнопки при смене адреса."""
+    global PUBLIC_URL, TUNNEL_PROC
+    providers = [
+        (
+            ["ssh", "-T", "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-p", "443", f"-R0:127.0.0.1:{port}", "a.pinggy.io"],
+            r"https://[a-zA-Z0-9.-]+\.pinggy\.link"
+        ),
+        (
+            ["ssh", "-T", "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-R", f"80:127.0.0.1:{port}", "nokey@localhost.run"],
+            r"https://[a-zA-Z0-9.-]+\.lhr\.life"
+        )
+    ]
+    idx = 0
+    while True:
+        cmd, pattern = providers[idx % len(providers)]
+        idx += 1
+        try:
+            TUNNEL_PROC = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT
+            )
+            regex = re.compile(pattern)
+            found_url = ""
+            for _ in range(35):
+                line = await asyncio.wait_for(TUNNEL_PROC.stdout.readline(), timeout=6.0)
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="ignore")
+                m = regex.search(text)
+                if m:
+                    found_url = m.group(0)
+                    break
+
+            if found_url:
+                PUBLIC_URL = found_url
+                print(f"\n[OK] Активная ссылка для Telegram WebApp: {PUBLIC_URL}")
+                await update_telegram_buttons(PUBLIC_URL)
+
+                while True:
+                    line = await TUNNEL_PROC.stdout.readline()
+                    if not line:
+                        break
+                    text = line.decode("utf-8", errors="ignore")
+                    m = regex.search(text)
+                    if m and m.group(0) != PUBLIC_URL:
+                        PUBLIC_URL = m.group(0)
+                        print(f"\n[Авто-обновление] Новая ссылка туннеля: {PUBLIC_URL}")
+                        await update_telegram_buttons(PUBLIC_URL)
+
+            print("[!] Туннель закрылся, переподключаю за 2 секунды...")
+            try:
+                TUNNEL_PROC.kill()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+
+dp = Dispatcher()
+
+@dp.message(CommandStart())
+async def cmd_start(message: Message):
+    global ADMIN_CHAT_ID
+    chat_id = message.chat.id
+    KNOWN_CHATS.add(chat_id)
+
+    if ADMIN_CHAT_ID == 0:
+        ADMIN_CHAT_ID = message.from_user.id
+        print(f"[OK] Твой Telegram ID ({ADMIN_CHAT_ID}) сохранён как АДМИН!")
+
+    fresh_url = get_fresh_webapp_url(PUBLIC_URL)
+
+    # Принудительно перезаписываем синюю кнопку меню именно для этого чата!
+    try:
+        await message.bot.set_chat_menu_button(
+            chat_id=chat_id,
+            menu_button=MenuButtonWebApp(text="🧊 3D Студия", web_app=WebAppInfo(url=fresh_url))
+        )
+    except Exception as e:
+        print(f"[Инфо кнопки меню]: {e}")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧊 Открыть 3D-Студию сувениров", web_app=WebAppInfo(url=fresh_url))]
+    ])
+    sent = await message.answer(
+        "Добро пожаловать в **STL Studio 3D**!\n\n"
+        "🔹 Создавай 3D-брелоки со звуковой волной голоса, автономера, 3D QR-коды и ночники по фото.\n"
+        "🔹 Первое скачивание `.STL` файла — **бесплатно**!\n"
+        "🔹 Обе кнопки (в сообщении и синяя кнопка **«🧊 3D Студия»** внизу) синхронизированы:",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+    LAST_START_MSG[chat_id] = sent.message_id
+
+@dp.pre_checkout_query()
+async def on_pre_checkout(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+@dp.message(F.successful_payment)
+async def on_successful_payment(message: Message):
+    payment = message.successful_payment
+    stars = payment.total_amount
+    await message.answer(
+        f"✅ Оплата **{stars} ⭐ Telegram Stars** прошла успешно! Выгрузка 3D-моделей разблокирована.",
+        parse_mode="Markdown"
+    )
+    if ADMIN_CHAT_ID:
+        await bot_instance.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"💰 **НОВАЯ ПРОДАЖА В БОТЕ!**\nПоступила оплата **+{stars} ⭐ Stars** от @{message.from_user.username or message.from_user.id}",
+            parse_mode="Markdown"
+        )
+
+async def main():
+    global PUBLIC_URL, bot_instance
+    app = web.Application()
+    app.router.add_get("/", handle_index)
+    app.router.add_get("/api/ping", handle_ping)
+    app.router.add_post("/api/create_invoice", handle_create_invoice)
+    app.router.add_post("/api/send_stl", handle_send_stl)
+    app.router.add_post("/api/order", handle_order)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+
+    local_url = f"http://127.0.0.1:{PORT}"
+    print(f"[OK] Коммерческая 3D-студия запущена локально: {local_url}")
+    webbrowser.open(local_url)
+
+    bot_instance = Bot(token=BOT_TOKEN)
+
+    asyncio.create_task(tunnel_watchdog(PORT))
+
+    for _ in range(30):
+        if PUBLIC_URL:
+            break
+        await asyncio.sleep(0.5)
+
+    print("[OK] Бот запущен! Отправь боту /start в Telegram один раз, чтобы сбросить кэш синей кнопки меню.")
+    await dp.start_polling(bot_instance, handle_signals=False)
+
+if __name__ == "__main__":
+    asyncio.run(main())
