@@ -964,26 +964,25 @@ function handleExportClick() {
     openPayModal();
   }
 }
-
-async function buyWithStars(plan) {
-  try {
-    const resp = await fetch(`${API_BASE}/api/create_invoice`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan, user_id: tgUser.id })
+const SINGLE_SLUG = urlParams.get('s') || '';
+const PRO_SLUG = urlParams.get('p') || '';
+function buyWithStars(plan) {
+  const slug = (plan === 'pro') ? PRO_SLUG : SINGLE_SLUG;
+  if (slug && tg?.openInvoice) {
+    const invoiceUrl = `https://t.me/$${slug}`;
+    tg.openInvoice(invoiceUrl, status => {
+      if (status === 'paid') {
+        if (plan === 'pro') billing.isPro = true;
+        else billing.freeLeft += 1;
+        saveBilling();
+        closePayModal();
+        executeBinarySTLExport();
+      }
     });
-    const data = await resp.json();
-
-    if (data.invoice_link && tg?.openInvoice) {
-      tg.openInvoice(data.invoice_link, status => {
-        if (status === 'paid') {
-          if (plan === 'pro') billing.isPro = true;
-          else billing.freeLeft += 1;
-          saveBilling();
-          closePayModal();
-          executeBinarySTLExport();
-        }
-      });
+  } else {
+    alert('Откройте 3D-студию через кнопку внутри самого бота (напишите боту /start), чтобы активировать оплату Telegram Stars.');
+  }
+}
     } else {
       alert('Для оплаты через Telegram Stars откройте студию внутри бота Telegram.');
     }
