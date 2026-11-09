@@ -3,170 +3,158 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>STL Studio 3D</title>
+<title>STL Studio 3D CAD</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <style>
   * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
-  body { margin: 0; background: #090d14; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+  body { margin: 0; background: #090d14; color: #e2e8f0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; height: 100vh; width: 100vw; overflow: hidden; }
 
-  #workspace { display: flex; flex: 1; width: 100%; height: 100vh; overflow: hidden; flex-direction: row; }
+  /* БАЗОВАЯ КОМПОНОВКА: СЛЕВА ПАНЕЛЬ НАСТРОЕК, СПРАВА 3D-МОДЕЛЬ */
+  #workspace { display: flex; width: 100%; height: 100%; flex-direction: row; overflow: hidden; }
 
-  /* ЛЕВАЯ ЧАСТЬ: 3D-ОКНО */
-  #viewport { position: relative; flex: 1; height: 100%; background: radial-gradient(circle at 50% 50%, #1a2538 0%, #070a10 100%); overflow: hidden; }
-  .vp-top { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; gap: 8px; pointer-events: none; flex-wrap: wrap; z-index: 5; }
-  .vp-group { display: flex; gap: 6px; pointer-events: auto; flex-wrap: wrap; }
-  .btn-light { background: rgba(17, 24, 38, 0.88); color: #cbd5e1; border: 1px solid #334766; padding: 7px 11px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; backdrop-filter: blur(6px); transition: 0.15s; outline: none; }
-  .btn-light:hover { border-color: #38bdf8; color: #fff; }
-  .btn-light.active { background: #f59e0b; color: #000; border-color: #fbbf24; box-shadow: 0 0 12px rgba(245, 158, 11, 0.5); }
+  /* ПАНЕЛЬ НАСТРОЕК (СЛЕВА) */
+  #sidebar { width: 370px; min-width: 310px; height: 100%; background: #101622; border-right: 1px solid #222f45; display: flex; flex-direction: column; z-index: 20; flex-shrink: 0; }
+  .side-header { padding: 9px 12px; background: #141c2b; border-bottom: 1px solid #222f45; display: flex; justify-content: space-between; align-items: center; }
+  .brand { font-weight: 800; font-size: 13px; letter-spacing: 0.8px; color: #38bdf8; text-transform: uppercase; }
+  .header-right { display: flex; gap: 6px; align-items: center; }
+  .quota-pill { font-size: 11px; background: #192436; border: 1px solid #2e4363; color: #cbd5e1; padding: 3px 8px; border-radius: 4px; font-weight: 600; cursor: pointer; }
+  .quota-pill.pro { border-color: #eab308; color: #fde047; }
+  .layout-btn { background: #1e293b; color: #94a3b8; border: 1px solid #334155; padding: 3px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; cursor: pointer; display: none; }
 
-  .vp-bottom { position: absolute; bottom: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: center; background: rgba(13, 19, 30, 0.9); border: 1px solid #263852; padding: 9px 14px; border-radius: 10px; backdrop-filter: blur(6px); pointer-events: none; z-index: 5; flex-wrap: wrap; gap: 8px; }
-  .stat-item { font-size: 12px; color: #94a3b8; }
-  .stat-item b { color: #38bdf8; font-family: monospace; font-size: 13px; }
+  /* 3 СТРОГИЕ ВКЛАДКИ БЕЗ ИКОНОК */
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); background: #0b0f19; border-bottom: 1px solid #1e293b; flex-shrink: 0; }
+  .tab-btn { padding: 9px 4px; text-align: center; font-size: 11px; font-weight: 700; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; text-transform: uppercase; letter-spacing: 0.4px; }
+  .tab-btn.active { color: #38bdf8; border-bottom-color: #38bdf8; background: #131b29; }
 
-  /* ПРАВАЯ ЧАСТЬ: ПАНЕЛЬ НАСТРОЕК */
-  #sidebar { width: 410px; min-width: 350px; max-width: 440px; height: 100%; background: #111824; border-left: 1px solid #243247; display: flex; flex-direction: column; z-index: 10; }
-  .side-header { padding: 10px 14px; background: #141d2d; border-bottom: 1px solid #243247; display: flex; justify-content: space-between; align-items: center; }
-  .brand { font-weight: 900; font-size: 14px; letter-spacing: 0.5px; background: linear-gradient(90deg, #00e5ff, #fbbf24); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-  .quota-pill { font-size: 11px; background: #1e293b; border: 1px solid #38bdf8; color: #e2e8f0; padding: 3px 9px; border-radius: 20px; font-weight: bold; cursor: pointer; }
-  .quota-pill.pro { background: rgba(245, 158, 11, 0.2); border-color: #fbbf24; color: #fde68a; }
-
-  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); background: #0c111b; border-bottom: 1px solid #1e293b; }
-  .tab-btn { padding: 10px 2px; text-align: center; font-size: 11px; font-weight: bold; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; transition: 0.15s; }
-  .tab-btn.active { color: #38bdf8; border-bottom-color: #00e5ff; background: #131c2c; }
-
-  #controls { flex: 1; padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-  .tab-panel { display: none; flex-direction: column; gap: 10px; }
+  #controls { flex: 1; padding: 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .tab-panel { display: none; flex-direction: column; gap: 8px; }
   .tab-panel.active { display: flex; }
 
-  .file-label { background: #192538; border: 1px dashed #38bdf8; color: #38bdf8; padding: 10px; border-radius: 8px; text-align: center; font-size: 12px; font-weight: bold; cursor: pointer; display: block; }
+  .file-label { background: #162133; border: 1px solid #2b4263; color: #38bdf8; padding: 8px; border-radius: 5px; text-align: center; font-size: 11px; font-weight: 700; cursor: pointer; display: block; text-transform: uppercase; letter-spacing: 0.4px; }
+  .file-label:hover { background: #1c2b42; }
   input[type="file"] { display: none; }
 
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .ctrl-group { background: #162030; border: 1px solid #233248; padding: 8px 10px; border-radius: 8px; display: flex; flex-direction: column; gap: 5px; }
-  .ctrl-head { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; }
-  .ctrl-head b { color: #f8fafc; font-family: monospace; font-size: 12px; }
-  input[type="range"] { width: 100%; accent-color: #00e5ff; cursor: pointer; margin: 0; }
-  select, input[type="text"], textarea { background: #0c121d; color: #e2e8f0; border: 1px solid #2b3d59; padding: 7px 9px; border-radius: 6px; font-size: 12px; outline: none; width: 100%; font-family: inherit; }
-  input[type="text"]:focus, textarea:focus { border-color: #00e5ff; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .ctrl-group { background: #151e2e; border: 1px solid #212f47; padding: 6px 8px; border-radius: 5px; display: flex; flex-direction: column; gap: 4px; }
+  .ctrl-head { display: flex; justify-content: space-between; font-size: 10px; color: #94a3b8; text-transform: uppercase; }
+  .ctrl-head b { color: #f8fafc; font-family: monospace; font-size: 11px; }
+  input[type="range"] { width: 100%; accent-color: #38bdf8; cursor: pointer; margin: 0; height: 16px; }
+  select, input[type="text"] { background: #0b101a; color: #e2e8f0; border: 1px solid #283a57; padding: 5px 7px; border-radius: 4px; font-size: 11px; outline: none; width: 100%; font-family: inherit; }
+  input[type="text"]:focus { border-color: #38bdf8; }
 
-  .preset-card { background: #172234; border: 1px solid #2a3d5c; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 7px; }
-  .preset-title { font-size: 12px; font-weight: bold; color: #38bdf8; display: flex; justify-content: space-between; align-items: center; }
-  .action-btn { background: #1e293b; color: #e2e8f0; border: 1px solid #38bdf8; padding: 8px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer; text-align: center; }
+  .preset-card { background: #151e2e; border: 1px solid #22324a; border-radius: 5px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .preset-title { font-size: 11px; font-weight: 700; color: #cbd5e1; display: flex; justify-content: space-between; text-transform: uppercase; }
+  .action-btn { background: #1e293b; color: #e2e8f0; border: 1px solid #38bdf8; padding: 6px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; text-align: center; }
   .action-btn:hover { background: #0284c7; color: #fff; }
-  .action-btn.rec { border-color: #f43f5e; color: #fda4af; }
+  .action-btn.rec { border-color: #e11d48; color: #fda4af; }
 
   .toggles { display: flex; gap: 6px; }
-  .chk-btn { flex: 1; background: #162030; border: 1px solid #2a3a52; color: #94a3b8; padding: 8px 4px; border-radius: 8px; font-size: 11px; font-weight: bold; text-align: center; cursor: pointer; }
-  .chk-btn.on { background: #112e2b; border-color: #10b981; color: #34d399; }
+  .chk-btn { flex: 1; background: #151e2e; border: 1px solid #24344d; color: #94a3b8; padding: 6px 4px; border-radius: 4px; font-size: 10px; font-weight: 700; text-align: center; cursor: pointer; text-transform: uppercase; }
+  .chk-btn.on { background: #0f2926; border-color: #10b981; color: #34d399; }
 
-  .side-footer { background: #0d131f; padding: 12px 14px; border-top: 1px solid #233248; display: flex; flex-direction: column; gap: 8px; }
-  .export-btn { width: 100%; background: linear-gradient(135deg, #00e5ff, #0284c7); color: #04121a; border: none; padding: 12px; border-radius: 9px; font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.7px; cursor: pointer; box-shadow: 0 4px 14px rgba(0, 229, 255, 0.25); }
+  .side-footer { background: #0c111c; padding: 8px 10px; border-top: 1px solid #1e293b; flex-shrink: 0; }
+  .export-btn { width: 100%; background: #0284c7; color: #ffffff; border: 1px solid #38bdf8; padding: 10px; border-radius: 5px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; cursor: pointer; }
+  .export-btn:active { background: #0369a1; }
 
-  /* Кнопки переключения видов для телефонов */
-  .mobile-nav { display: none; background: #0c111b; border-bottom: 1px solid #1e293b; }
-  .mob-nav-btn { flex: 1; padding: 11px; text-align: center; font-size: 12px; font-weight: bold; color: #64748b; cursor: pointer; background: #0c111b; border: none; outline: none; }
-  .mob-nav-btn.active { color: #38bdf8; background: #131c2c; border-bottom: 2px solid #00e5ff; }
+  /* 3D-ОКНО МОДЕЛИ (СПРАВА) */
+  #viewport { position: relative; flex: 1; height: 100%; background: radial-gradient(circle at 50% 50%, #172236 0%, #070a10 100%); overflow: hidden; }
+  .vp-top { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; gap: 6px; pointer-events: none; flex-wrap: wrap; z-index: 5; }
+  .vp-group { display: flex; gap: 5px; pointer-events: auto; flex-wrap: wrap; }
+  .btn-light { background: rgba(15, 22, 34, 0.9); color: #cbd5e1; border: 1px solid #2d405e; padding: 5px 9px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; outline: none; }
+  .btn-light.active { background: #0284c7; color: #fff; border-color: #38bdf8; }
 
-  /* МОДАЛЬНОЕ ОКНО ОПЛАТЫ */
-  .modal-backdrop { position: fixed; inset: 0; background: rgba(6, 10, 16, 0.88); backdrop-filter: blur(5px); z-index: 50; display: none; justify-content: center; align-items: center; padding: 16px; }
-  .modal-box { background: #131c2b; border: 1px solid #2f4363; border-radius: 12px; max-width: 390px; width: 100%; padding: 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 12px 35px rgba(0,0,0,0.6); }
-  .m-title { font-size: 17px; font-weight: 900; color: #fff; text-align: center; }
-  .m-sub { font-size: 12px; color: #94a3b8; text-align: center; line-height: 1.4; }
-  .pay-card { background: linear-gradient(135deg, #1b283d, #152030); border: 2px solid #38bdf8; border-radius: 10px; padding: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: 0.15s; }
-  .pay-card:hover { transform: scale(0.99); border-color: #fbbf24; }
-  .pay-card.vip { border-color: #f59e0b; background: linear-gradient(135deg, #2b2212, #1a1610); }
-  .star-badge { background: #f59e0b; color: #000; font-weight: 900; font-size: 13px; padding: 5px 10px; border-radius: 20px; white-space: nowrap; }
-  .close-link { text-align: center; font-size: 12px; color: #64748b; cursor: pointer; padding: 4px; }
+  .vp-bottom { position: absolute; bottom: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; align-items: center; background: rgba(12, 17, 28, 0.92); border: 1px solid #23334d; padding: 6px 10px; border-radius: 4px; pointer-events: none; z-index: 5; flex-wrap: wrap; gap: 6px; }
+  .stat-item { font-size: 11px; color: #94a3b8; font-family: monospace; }
+  .stat-item b { color: #38bdf8; }
 
-  /* Адаптация под смартфоны с переключением экранов */
-  @media (max-width: 780px) {
-    #workspace { flex-direction: column; }
-    .mobile-nav { display: flex; }
-    
-    #viewport { width: 100%; height: 100%; position: absolute; inset: 0; z-index: 2; display: none; }
-    #viewport.mobile-active { display: block; }
+  /* МОДАЛЬНОЕ ОКНО ВЫГРУЗКИ */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(5, 8, 14, 0.88); z-index: 100; display: none; justify-content: center; align-items: center; padding: 16px; }
+  .modal-box { background: #121926; border: 1px solid #293d5c; border-radius: 8px; max-width: 360px; width: 100%; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .m-title { font-size: 14px; font-weight: 800; color: #fff; text-align: center; text-transform: uppercase; }
+  .m-sub { font-size: 11px; color: #94a3b8; text-align: center; line-height: 1.4; }
+  .pay-card { background: #172234; border: 1px solid #38bdf8; border-radius: 6px; padding: 10px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+  .pay-card.vip { border-color: #eab308; }
+  .star-badge { background: #eab308; color: #000; font-weight: 800; font-size: 11px; padding: 4px 8px; border-radius: 4px; white-space: nowrap; }
+  .close-link { text-align: center; font-size: 11px; color: #64748b; cursor: pointer; padding: 4px; text-transform: uppercase; }
 
-    #sidebar { width: 100%; max-width: 100%; height: 100%; position: absolute; inset: 0; z-index: 2; display: none; border-left: none; }
-    #sidebar.mobile-active { display: flex; }
+  /* АДАПТАЦИЯ ПОД ТЕЛЕФОН */
+  @media (max-width: 820px) {
+    .layout-btn { display: inline-block; }
   }
+
+  /* Если телефон держат вертикально (и не включен принудительный боковой режим) */
+  @media (max-width: 720px) and (orientation: portrait) {
+    body:not(.force-side) #workspace { flex-direction: column-reverse; }
+    body:not(.force-side) #viewport { height: 50vh; width: 100%; }
+    body:not(.force-side) #sidebar { width: 100%; height: 50vh; border-right: none; border-top: 1px solid #222f45; }
+  }
+
+  /* Если телефон повернули горизонтально ИЛИ нажата кнопка «Боковой режим ПК» */
+  body.force-side #workspace { flex-direction: row !important; }
+  body.force-side #sidebar { width: 46vw !important; min-width: 195px !important; height: 100vh !important; border-right: 1px solid #222f45 !important; border-top: none !important; }
+  body.force-side #viewport { flex: 1 !important; height: 100vh !important; }
+
+  /* Принудительный поворот интерфейса на 90 градусов прямо на вертикальном телефоне */
+  body.rotate-90 {
+    width: 100vh !important;
+    height: 100vw !important;
+    transform: rotate(90deg) translateY(-100%);
+    transform-origin: top left;
+    position: fixed;
+    top: 0; left: 0;
+  }
+  body.rotate-90 #workspace { flex-direction: row !important; width: 100vh !important; height: 100vw !important; }
+  body.rotate-90 #sidebar { width: 320px !important; height: 100vw !important; }
+  body.rotate-90 #viewport { flex: 1 !important; height: 100vw !important; }
 </style>
 </head>
 <body>
 
-<div class="mobile-nav">
-  <button class="mob-nav-btn active" id="nav-edit" onclick="switchMobileView('edit')">Редактор</button>
-  <button class="mob-nav-btn" id="nav-3d" onclick="switchMobileView('3d')">3D Модель</button>
-</div>
-
 <div id="workspace">
-  <!-- ЛЕВАЯ ЧАСТЬ: 3D ОКНО -->
-  <div id="viewport" class="mobile-active">
-    <div class="vp-top">
-      <div class="vp-group">
-        <button class="btn-light" id="backlight-btn" onclick="toggleBacklight()">Просвет</button>
-        <button class="btn-light" id="wire-btn" onclick="toggleWireframe()">Сетка САПР</button>
-        <button class="btn-light" id="rot-btn" onclick="toggleAutoRotate()">Вращение</button>
-      </div>
-      <div class="vp-group">
-        <select class="btn-light" id="mat-sel" onchange="changeFilament(this.value)">
-          <option value="sky">Синий PETG</option>
-          <option value="gold">Золотой Шёлк</option>
-          <option value="ivory">Белый Литофан</option>
-          <option value="emerald">Изумруд</option>
-          <option value="copper">Медный</option>
-          <option value="carbon">Чёрный Карбон</option>
-        </select>
-        <button class="btn-light" onclick="resetCam()">Центр</button>
-      </div>
-    </div>
-
-    <div class="vp-bottom">
-      <div class="stat-item" id="dim-info">Габариты: <b>65.0 × 65.0 × 4.0 мм</b></div>
-      <div class="stat-item" id="vol-info">Вес: <b>12.4 г</b> (9.8 см³)</div>
-    </div>
-  </div>
-
-  <!-- ПРАВАЯ ЧАСТЬ: ПАНЕЛЬ НАСТРОЕК -->
-  <div id="sidebar" class="">
+  <!-- ЛЕВАЯ ПАНЕЛЬ НАСТРОЕК -->
+  <div id="sidebar">
     <div class="side-header">
-      <div class="brand">STL STUDIO 3D</div>
-      <div class="quota-pill" id="quota-badge" onclick="openPayModal()">Лимит: 1 беспл.</div>
+      <div class="brand">STL STUDIO CAD</div>
+      <div class="header-right">
+        <button class="layout-btn" id="view-mode-btn" onclick="cycleMobileLayout()">Вид: Горизонт.</button>
+        <div class="quota-pill" id="quota-badge" onclick="openPayModal()">Лимит: 1</div>
+      </div>
     </div>
 
     <div class="tabs">
-      <div class="tab-btn active" onclick="switchTab(0)">Форма</div>
-      <div class="tab-btn" onclick="switchTab(1)">Шаблоны</div>
-      <div class="tab-btn" onclick="switchTab(2)">Текст/Фото</div>
+      <div class="tab-btn active" onclick="switchTab(0)">1. Геометрия</div>
+      <div class="tab-btn" onclick="switchTab(1)">2. Генераторы</div>
+      <div class="tab-btn" onclick="switchTab(2)">3. Текст / Слои</div>
     </div>
 
     <div id="controls">
-      <!-- ВКЛАДКА 1: ФОРМА -->
+      <!-- ВКЛАДКА 1: ГЕОМЕТРИЯ И ФОРМА -->
       <div class="tab-panel active" id="tab-0">
         <label class="file-label">
-          Загрузить своё фото / логотип (PNG, JPG)
+          Загрузить изображение (PNG / JPG)
           <input type="file" id="img-input" accept="image/*">
         </label>
 
         <div class="grid-2">
           <div class="ctrl-group">
-            <div class="ctrl-head"><span>Режим рельефа</span></div>
+            <div class="ctrl-head"><span>Тип модели</span></div>
             <select id="mode-sel" onchange="rebuildMesh()">
-              <option value="relief">3D-Барельеф</option>
-              <option value="litho">Литофания (Лампа)</option>
-              <option value="voxel">Ступени (4 слоя)</option>
-              <option value="stamp">3D-Штамп (Зеркало)</option>
+              <option value="relief">Барельеф (Выпуклый)</option>
+              <option value="litho">Литофания (На просвет)</option>
+              <option value="voxel">Ступенчатый (4 слоя)</option>
+              <option value="stamp">Штамп (Зеркальный)</option>
             </select>
           </div>
           <div class="ctrl-group">
-            <div class="ctrl-head"><span>3D-Профиль детали</span></div>
+            <div class="ctrl-head"><span>Профиль</span></div>
             <select id="curve-sel" onchange="rebuildMesh()">
-              <option value="flat">Плоская / Брелок</option>
-              <option value="stand">Стела с подставкой</option>
-              <option value="arc100">Ночник (Дуга 100°)</option>
-              <option value="arc180">Плафон (Дуга 180°)</option>
+              <option value="flat">Плоская пластина</option>
+              <option value="stand">Стела на подставке</option>
+              <option value="arc100">Изгиб (Дуга 100°)</option>
+              <option value="arc180">Полуцилиндр (180°)</option>
             </select>
           </div>
         </div>
@@ -177,99 +165,99 @@
             <input type="range" id="s-width" min="25" max="160" step="1" value="65" oninput="onSlider()">
           </div>
           <div class="ctrl-group">
-            <div class="ctrl-head"><span>Высота рельефа</span><b id="v-rel">2.6 мм</b></div>
+            <div class="ctrl-head"><span>Рельеф (Z)</span><b id="v-rel">2.6 мм</b></div>
             <input type="range" id="s-rel" min="0.5" max="8.0" step="0.1" value="2.6" oninput="onSlider()">
           </div>
           <div class="ctrl-group">
-            <div class="ctrl-head"><span>Толщина базы</span><b id="v-base">1.4 мм</b></div>
+            <div class="ctrl-head"><span>База (Дно)</span><b id="v-base">1.4 мм</b></div>
             <input type="range" id="s-base" min="0.6" max="5.0" step="0.2" value="1.4" oninput="onSlider()">
           </div>
           <div class="ctrl-group">
-            <div class="ctrl-head"><span>Контур обрезки</span></div>
+            <div class="ctrl-head"><span>Контур</span></div>
             <select id="shape-sel" onchange="rebuildMesh()">
               <option value="rect">Прямоугольник</option>
               <option value="circle">Круглый медальон</option>
-              <option value="cutout">Вырез по силуэту</option>
+              <option value="cutout">По силуэту (Без фона)</option>
             </select>
           </div>
         </div>
 
         <div class="toggles">
-          <div class="chk-btn on" id="btn-ring" onclick="toggleOpt('ring')">Ушко брелока: ВКЛ</div>
-          <div class="chk-btn on" id="btn-frame" onclick="toggleOpt('frame')">Рамка по краю: ВКЛ</div>
+          <div class="chk-btn on" id="btn-ring" onclick="toggleOpt('ring')">Ушко: ВКЛ</div>
+          <div class="chk-btn on" id="btn-frame" onclick="toggleOpt('frame')">Бортик: ВКЛ</div>
         </div>
       </div>
 
-      <!-- ВКЛАДКА 2: СПЕЦ-ШАБЛОНЫ -->
+      <!-- ВКЛАДКА 2: ПАРАМЕТРИЧЕСКИЕ ГЕНЕРАТОРЫ -->
       <div class="tab-panel" id="tab-1">
         <div class="preset-card">
-          <div class="preset-title"><span>3D-Брелок «Звуковая волна»</span><span style="font-size:10px;color:#94a3b8">Подарок</span></div>
-          <input type="text" id="wave-label" placeholder="Подпись (напр: Я тебя люблю)" value="VOICE WAVE">
+          <div class="preset-title"><span>Аудио-профиль (Звуковая волна)</span></div>
+          <input type="text" id="wave-label" placeholder="Подпись на корпусе" value="VOICE WAVE">
           <div class="grid-2">
-            <button class="action-btn rec" id="rec-btn" onclick="recordVoiceWave()">Записать голос</button>
-            <button class="action-btn" onclick="generateSynthWave()">Случайная волна</button>
+            <button class="action-btn rec" id="rec-btn" onclick="recordVoiceWave()">Запись с микрофона</button>
+            <button class="action-btn" onclick="generateSynthWave()">Сгенерировать спектр</button>
           </div>
         </div>
 
         <div class="preset-card">
-          <div class="preset-title"><span>3D QR-Код (Визитка / Wi-Fi)</span><span style="font-size:10px;color:#94a3b8">Сканируется</span></div>
-          <input type="text" id="qr-input" placeholder="Ссылка или текст" value="https://t.me/telegram">
-          <button class="action-btn" onclick="generateQR3D()">Сгенерировать 3D QR</button>
+          <div class="preset-title"><span>Генератор 3D QR-кода</span></div>
+          <input type="text" id="qr-input" placeholder="URL или текст" value="https://t.me/telegram">
+          <button class="action-btn" onclick="generateQR3D()">Построить 3D QR-матрицу</button>
         </div>
 
         <div class="preset-card">
-          <div class="preset-title"><span>Брелок «Госномер Авто»</span><span style="font-size:10px;color:#94a3b8">Сувенир</span></div>
+          <div class="preset-title"><span>Шаблон «Госномер»</span></div>
           <div class="grid-2">
-            <input type="text" id="plate-num" placeholder="Номер (А777АА)" value="А777АА" maxlength="6">
-            <input type="text" id="plate-reg" placeholder="Регион (777)" value="777" maxlength="3">
+            <input type="text" id="plate-num" placeholder="А777АА" value="А777АА" maxlength="6">
+            <input type="text" id="plate-reg" placeholder="777" value="777" maxlength="3">
           </div>
-          <button class="action-btn" onclick="generateLicensePlate()">Собрать 3D-Автономер</button>
+          <button class="action-btn" onclick="generateLicensePlate()">Построить номерную плашку</button>
         </div>
       </div>
 
-      <!-- ВКЛАДКА 3: ТЕКСТ И ФОТО -->
+      <!-- ВКЛАДКА 3: ТЕКСТ И ПАРАМЕТРЫ СЕТКИ -->
       <div class="tab-panel" id="tab-2">
         <div class="ctrl-group">
-          <div class="ctrl-head"><span>Добавить 3D-надпись поверх модели</span></div>
-          <input type="text" id="t-text" placeholder="Введите имя или дату..." value="" oninput="onSlider()">
+          <div class="ctrl-head"><span>Маркировка / 3D-Текст</span></div>
+          <input type="text" id="t-text" placeholder="Введите текст надписи..." value="" oninput="onSlider()">
         </div>
 
         <div class="grid-2">
           <div class="ctrl-group">
             <div class="ctrl-head"><span>Тип букв</span></div>
             <select id="t-mode" onchange="rebuildMesh()">
-              <option value="emboss">Выпуклые (+Z)</option>
-              <option value="engrave">Гравировка (-Z)</option>
+              <option value="emboss">Выдавливание (+Z)</option>
+              <option value="engrave">Вырез (-Z)</option>
             </select>
           </div>
           <div class="ctrl-group">
-            <div class="ctrl-head"><span>Позиция текста</span></div>
+            <div class="ctrl-head"><span>Позиция</span></div>
             <select id="t-pos" onchange="rebuildMesh()">
-              <option value="bottom">Снизу на плашке</option>
-              <option value="top">Сверху</option>
+              <option value="bottom">Внизу</option>
+              <option value="top">Вверху</option>
               <option value="center">По центру</option>
             </select>
           </div>
         </div>
 
         <div class="ctrl-group">
-          <div class="ctrl-head"><span>Размер шрифта</span><b id="v-tsize">14%</b></div>
+          <div class="ctrl-head"><span>Высота шрифта</span><b id="v-tsize">14%</b></div>
           <input type="range" id="s-tsize" min="7" max="28" step="1" value="14" oninput="onSlider()">
         </div>
 
         <div class="grid-2">
           <div class="ctrl-group">
-            <div class="ctrl-head"><span>Контраст фото</span><b id="v-contrast">100%</b></div>
+            <div class="ctrl-head"><span>Контраст</span><b id="v-contrast">100%</b></div>
             <input type="range" id="s-contrast" min="50" max="220" step="5" value="100" oninput="onSlider()">
           </div>
           <div class="ctrl-group">
-            <div class="ctrl-head"><span>Отсечка фона</span><b id="v-thresh">0%</b></div>
+            <div class="ctrl-head"><span>Порог фона</span><b id="v-thresh">0%</b></div>
             <input type="range" id="s-thresh" min="0" max="80" step="2" value="0" oninput="onSlider()">
           </div>
         </div>
 
         <div class="ctrl-group">
-          <div class="ctrl-head"><span>Плотность STL-сетки</span><b id="v-res">95 × 95</b></div>
+          <div class="ctrl-head"><span>Разрешение сетки</span><b id="v-res">95 × 95</b></div>
           <input type="range" id="s-res" min="55" max="165" step="10" value="95" onchange="rebuildMesh()" oninput="document.getElementById('v-res').textContent = this.value + ' × ' + this.value">
         </div>
 
@@ -281,66 +269,76 @@
     </div>
 
     <div class="side-footer">
-      <button class="export-btn" id="dl-btn" onclick="handleExportClick()">Скачать 3D-файл (.STL)</button>
+      <button class="export-btn" id="dl-btn" onclick="handleExportClick()">Экспорт .STL</button>
+    </div>
+  </div>
+
+  <!-- ПРАВОЕ ОКНО: 3D-МОДЕЛЬ -->
+  <div id="viewport">
+    <div class="vp-top">
+      <div class="vp-group">
+        <button class="btn-light" id="backlight-btn" onclick="toggleBacklight()">Просвет</button>
+        <button class="btn-light" id="wire-btn" onclick="toggleWireframe()">Сетка</button>
+        <button class="btn-light" id="rot-btn" onclick="toggleAutoRotate()">Вращение</button>
+      </div>
+      <div class="vp-group">
+        <select class="btn-light" id="mat-sel" onchange="changeFilament(this.value)">
+          <option value="sky">Синий PETG</option>
+          <option value="gold">Золотой PLA</option>
+          <option value="ivory">Белый Литофан</option>
+          <option value="emerald">Зелёный ABS</option>
+          <option value="copper">Медный</option>
+          <option value="carbon">Чёрный Карбон</option>
+        </select>
+        <button class="btn-light" onclick="resetCam()">Сброс вида</button>
+      </div>
+    </div>
+
+    <div class="vp-bottom">
+      <div class="stat-item" id="dim-info">X/Y/Z: <b>65.0 × 65.0 × 4.0 мм</b></div>
+      <div class="stat-item" id="vol-info">Масса: <b>10.5 г</b> (8.5 см³)</div>
     </div>
   </div>
 </div>
 
-<!-- МОДАЛЬНОЕ ОКНО ОПЛАТЫ -->
+<!-- МОДАЛЬНОЕ ОКНО ОПЛАТЫ ВЫГРУЗКИ -->
 <div class="modal-backdrop" id="pay-modal">
   <div class="modal-box">
-    <div class="m-title">Выгрузка 3D-модели (.STL)</div>
-    <div class="m-sub">Бесплатный пробный лимит исчерпан. Выберите тариф для мгновенного скачивания файла высокой чёткости и отправки его в чат Telegram:</div>
+    <div class="m-title">Экспорт 3D-модели (.STL)</div>
+    <div class="m-sub">Пробный лимит исчерпан. Выберите вариант доступа для выгрузки готового STL-файла:</div>
 
     <div class="pay-card" onclick="buyWithStars('single')">
       <div>
-        <div style="font-weight:bold; font-size:14px; color:#38bdf8;">Разовая выгрузка (+1 STL)</div>
-        <div style="font-size:11px; color:#94a3b8; margin-top:2px;">Скачивание файла + дубликат в чат бота</div>
+        <div style="font-weight:700; font-size:12px; color:#38bdf8;">Разовая выгрузка (+1 STL)</div>
+        <div style="font-size:10px; color:#94a3b8; margin-top:2px;">Прямое скачивание + отправка файла в чат</div>
       </div>
-      <div class="star-badge">25 ⭐</div>
+      <div class="star-badge">25 Stars</div>
     </div>
 
     <div class="pay-card vip" onclick="buyWithStars('pro')">
       <div>
-        <div style="font-weight:bold; font-size:14px; color:#fbbf24;">VIP-Безлимит PRO навсегда</div>
-        <div style="font-size:11px; color:#fde68a; margin-top:2px;">Неограниченное скачивание любых 3D-моделей</div>
+        <div style="font-weight:700; font-size:12px; color:#fde047;">Полный доступ PRO (Безлимит)</div>
+        <div style="font-size:10px; color:#94a3b8; margin-top:2px;">Неограниченный экспорт любых моделей</div>
       </div>
-      <div class="star-badge">150 ⭐</div>
+      <div class="star-badge">150 Stars</div>
     </div>
 
-    <div class="close-link" onclick="closePayModal()">Вернуться к редактированию</div>
+    <div class="close-link" onclick="closePayModal()">Отмена</div>
   </div>
 </div>
 
 <script>
 const tg = window.Telegram?.WebApp;
-let tgUser = { id: 0, username: "guest", first_name: "Гость" };
+let tgUser = { id: 0, username: "guest", first_name: "User" };
 if (tg) {
   tg.ready();
   tg.expand();
   if (tg.initDataUnsafe?.user) tgUser = tg.initDataUnsafe.user;
 }
 
-// Переключение экранов на мобильных устройствах
-function switchMobileView(view) {
-  const vp = document.getElementById('viewport');
-  const sb = document.getElementById('sidebar');
-  const btnEdit = document.getElementById('nav-edit');
-  const btn3d = document.getElementById('nav-3d');
-
-  if (view === 'edit') {
-    vp.classList.remove('mobile-active');
-    sb.classList.add('mobile-active');
-    btnEdit.classList.add('active');
-    btn3d.classList.remove('active');
-  } else {
-    sb.classList.remove('mobile-active');
-    vp.classList.add('mobile-active');
-    btn3d.classList.add('active');
-    btnEdit.classList.remove('active');
-    setTimeout(() => { handleViewportResize(); }, 50);
-  }
-}
+// Автоматически читаем адрес бэкенда из параметра ?api=... (передается ботом для работы Telegram Stars)
+const urlParams = new URLSearchParams(window.location.search);
+const API_BASE = urlParams.get('api') || '';
 
 let billing = { freeLeft: 1, isPro: false };
 try {
@@ -353,18 +351,38 @@ function saveBilling() {
   const badge = document.getElementById('quota-badge');
   const dlBtn = document.getElementById('dl-btn');
   if (billing.isPro) {
-    badge.textContent = 'VIP PRO: Безлимит';
+    badge.textContent = 'PRO Безлимит';
     badge.className = 'quota-pill pro';
-    dlBtn.textContent = 'Скачать .STL + в чат';
+    dlBtn.textContent = 'Экспорт .STL';
   } else if (billing.freeLeft > 0) {
-    badge.textContent = `Лимит: ${billing.freeLeft} беспл.`;
+    badge.textContent = `Доступно: ${billing.freeLeft}`;
     badge.className = 'quota-pill';
-    dlBtn.textContent = `Скачать .STL (${billing.freeLeft} беспл.)`;
+    dlBtn.textContent = `Экспорт .STL (${billing.freeLeft} беспл.)`;
   } else {
-    badge.textContent = 'Купить выгрузку';
+    badge.textContent = 'Тариф PRO';
     badge.className = 'quota-pill';
-    dlBtn.textContent = 'Скачать 3D-файл (.STL) — 25 Stars';
+    dlBtn.textContent = 'Экспорт .STL (25 Stars)';
   }
+}
+
+// Переключение компоновки экрана на смартфоне: Стандарт -> Боковой (Слева/Справа) -> Поворот 90°
+let mobileLayoutState = 0;
+function cycleMobileLayout() {
+  mobileLayoutState = (mobileLayoutState + 1) % 3;
+  const b = document.body;
+  const btn = document.getElementById('view-mode-btn');
+  b.classList.remove('force-side', 'rotate-90');
+
+  if (mobileLayoutState === 1) {
+    b.classList.add('force-side');
+    btn.textContent = 'Вид: Поворот 90°';
+  } else if (mobileLayoutState === 2) {
+    b.classList.add('rotate-90');
+    btn.textContent = 'Вид: Вертикальный';
+  } else {
+    btn.textContent = 'Вид: Слева/Справа';
+  }
+  setTimeout(handleViewportResize, 80);
 }
 
 let opts = { ring: true, frame: true, inv: false, smooth: true, backlight: false, wire: false, autoRot: false };
@@ -373,16 +391,17 @@ let imgAspect = 1.0;
 let currentGeometry = null;
 let sizeX = 65, sizeY = 65, sizeZ = 4.0;
 let modelVolumeCm3 = 8.5;
+let calcWeightG = 10.5;
 
-const vpEl = document.getElementById('viewport');
+const vp = document.getElementById('viewport');
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(42, vpEl.clientWidth / vpEl.clientHeight, 0.1, 1200);
+const camera = new THREE.PerspectiveCamera(42, vp.clientWidth / vp.clientHeight, 0.1, 1200);
 camera.position.set(0, -75, 90);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-renderer.setSize(vpEl.clientWidth, vpEl.clientHeight);
+renderer.setSize(vp.clientWidth, vp.clientHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-vpEl.appendChild(renderer.domElement);
+vp.appendChild(renderer.domElement);
 
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -416,14 +435,14 @@ const matStandard = new THREE.MeshStandardMaterial({ ...FILAMENTS.sky, side: THR
 const matLitho = new THREE.MeshStandardMaterial({ color: 0xfffbeb, roughness: 0.5, metalness: 0.0, side: THREE.DoubleSide });
 
 function handleViewportResize() {
-  const w = vpEl.clientWidth, h = vpEl.clientHeight;
+  const w = vp.clientWidth, h = vp.clientHeight;
   if (w === 0 || h === 0) return;
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
 }
 window.addEventListener('resize', handleViewportResize);
-setTimeout(handleViewportResize, 50);
+setTimeout(handleViewportResize, 60);
 
 function switchTab(idx) {
   document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
@@ -519,7 +538,7 @@ async function recordVoiceWave() {
     const data = new Uint8Array(analyser.frequencyBinCount);
 
     const samples = [];
-    btn.textContent = 'Идет запись (2.5с)...';
+    btn.textContent = 'Запись (2.5 сек)...';
     for (let i = 0; i < 38; i++) {
       await new Promise(r => setTimeout(r, 65));
       analyser.getByteTimeDomainData(data);
@@ -532,10 +551,10 @@ async function recordVoiceWave() {
     }
     stream.getTracks().forEach(t => t.stop());
     audioCtx.close();
-    btn.textContent = 'Записать голос';
+    btn.textContent = 'Запись с микрофона';
     drawWaveformCanvas(samples, document.getElementById('wave-label').value.trim());
   } catch (err) {
-    btn.textContent = 'Записать голос';
+    btn.textContent = 'Запись с микрофона';
     generateSynthWave();
   }
 }
@@ -655,7 +674,7 @@ document.getElementById('img-input').addEventListener('change', e => {
 function toggleOpt(key) {
   opts[key] = !opts[key];
   const btn = document.getElementById('btn-' + key);
-  const titles = { ring: 'Ушко брелока', frame: 'Рамка по краю', inv: 'Инверсия', smooth: 'Сглаживание' };
+  const titles = { ring: 'Ушко', frame: 'Бортик', inv: 'Инверсия', smooth: 'Сглаживание' };
   btn.textContent = `${titles[key]}: ${opts[key] ? 'ВКЛ' : 'ВЫКЛ'}`;
   btn.className = 'chk-btn' + (opts[key] ? ' on' : '');
   rebuildMesh();
@@ -913,6 +932,7 @@ function rebuildMesh() {
   }
 
   modelVolumeCm3 = Math.max(0.5, volMm3 / 1000.0);
+  calcWeightG = +(modelVolumeCm3 * 1.24 * 0.7).toFixed(1);
 
   if (meshObj) {
     scene.remove(meshObj);
@@ -941,13 +961,11 @@ function rebuildMesh() {
   const dy = (bb.max.y - bb.min.y).toFixed(1);
   const dz = (bb.max.z - bb.min.z).toFixed(1);
   const triCount = positions.length / 9;
-  document.getElementById('dim-info').innerHTML =
-    `Габариты: <b>${dx} × ${dy} × ${dz} мм</b> (${(triCount/1000).toFixed(1)}k тр.)`;
 
-  const effDensity = 1.24 * (0.42 + 0.58 * 0.25);
-  let calcWeightG = +(modelVolumeCm3 * effDensity).toFixed(1);
+  document.getElementById('dim-info').innerHTML =
+    `X/Y/Z: <b>${dx} × ${dy} × ${dz} мм</b> (${(triCount/1000).toFixed(1)}k тр.)`;
   document.getElementById('vol-info').innerHTML =
-    `Вес: <b>${calcWeightG} г</b> (${modelVolumeCm3.toFixed(1)} см³)`;
+    `Масса: <b>${calcWeightG} г</b> (${modelVolumeCm3.toFixed(1)} см³)`;
 }
 
 function openPayModal() { document.getElementById('pay-modal').style.display = 'flex'; }
@@ -967,7 +985,7 @@ function handleExportClick() {
 
 async function buyWithStars(plan) {
   try {
-    const resp = await fetch('/api/create_invoice', {
+    const resp = await fetch(`${API_BASE}/api/create_invoice`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ plan, user_id: tgUser.id })
@@ -985,16 +1003,10 @@ async function buyWithStars(plan) {
         }
       });
     } else {
-      if (confirm('Тестовый режим браузера: симулировать успешную оплату Telegram Stars?')) {
-        if (plan === 'pro') billing.isPro = true;
-        else billing.freeLeft += 1;
-        saveBilling();
-        closePayModal();
-        executeBinarySTLExport();
-      }
+      alert('Для оплаты через Telegram Stars откройте студию внутри бота Telegram.');
     }
   } catch (e) {
-    alert('Ошибка создания счёта. Проверьте соединение с сервером.');
+    alert('Сервер оплаты временно недоступен. Убедитесь, что бот запущен.');
   }
 }
 
@@ -1036,19 +1048,28 @@ async function executeBinarySTLExport() {
   if (!currentGeometry) return;
   const buffer = buildSTLBuffer();
   const curve = document.getElementById('curve-sel').value;
-  const filename = `stl_studio_${curve}_${sizeX}mm.stl`;
+  const filename = `model_${curve}_${sizeX}mm.stl`;
 
   const blob = new Blob([buffer], { type: 'application/octet-stream' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
   link.download = filename;
   link.click();
+
+  if (tgUser.id && API_BASE) {
+    const form = new FormData();
+    form.append('user_id', tgUser.id);
+    form.append('filename', filename);
+    form.append('caption', `Готовая 3D-модель: ${filename}\n${document.getElementById('dim-info').innerText}`);
+    form.append('file', blob, filename);
+    fetch(`${API_BASE}/api/send_stl`, { method: 'POST', body: form }).catch(() => {});
+  }
 }
 
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
-  renderer.renderer?.render ? renderer.render(scene, camera) : renderer.render(scene, camera);
+  renderer.render(scene, camera);
 }
 
 saveBilling();
